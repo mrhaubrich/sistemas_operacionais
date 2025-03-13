@@ -4,5 +4,8 @@
 # Except .c files
 !*.c
 
+# Except .py files
+!*.py
+
 # But still ignore .o files
 *.o
