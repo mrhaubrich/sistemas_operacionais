@@ -1,0 +1,8 @@
+# Ignore everything
+*
+
+# Except .c files
+!*.c
+
+# But still ignore .o files
+*.o
