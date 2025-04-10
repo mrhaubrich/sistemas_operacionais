@@ -1,10 +1,9 @@
 # .clang-format
-BasedOnStyle: LLVM
-IndentWidth: 4        # The number of columns per indentation level (used for alignment)
+BasedOnStyle: Google
 SortIncludes: true
-AllowShortFunctionsOnASingleLine: false
+IndentWidth: 4
 IncludeCategories:
-  - Regex: '^<.*>'   # System headers (angle brackets)
+  - Regex: '^<.*>'   # System headers: these come first
     Priority: 1
-  - Regex: '^".*"'   # Local headers (quotes)
+  - Regex: '^".*"'   # Local headers: these come next
     Priority: 2

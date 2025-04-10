@@ -1,7 +1,9 @@
+# .clang-format
 BasedOnStyle: Google
 SortIncludes: true
+IndentWidth: 4
 IncludeCategories:
-  - Regex: '^<.*>'
+  - Regex: '^<.*>'   # System headers: these come first
     Priority: 1
-  - Regex: '^".*'
+  - Regex: '^".*"'   # Local headers: these come next
     Priority: 2
