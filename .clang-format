@@ -1,0 +1,7 @@
+BasedOnStyle: Google
+SortIncludes: true
+IncludeCategories:
+  - Regex: '^<.*>'
+    Priority: 1
+  - Regex: '^".*'
+    Priority: 2

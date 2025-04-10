@@ -1,0 +1,10 @@
+# .clang-format
+BasedOnStyle: LLVM
+IndentWidth: 4        # The number of columns per indentation level (used for alignment)
+SortIncludes: true
+AllowShortFunctionsOnASingleLine: false
+IncludeCategories:
+  - Regex: '^<.*>'   # System headers (angle brackets)
+    Priority: 1
+  - Regex: '^".*"'   # Local headers (quotes)
+    Priority: 2

@@ -1,0 +1,11 @@
+# Ignore everything
+*
+
+# Except .c files
+!*.c
+
+# Except for .gitignore files
+!*.gitignore
+
+# Except for .clang-format files
+!*.clang-format
