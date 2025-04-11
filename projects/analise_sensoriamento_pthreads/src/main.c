@@ -26,6 +26,7 @@ int main(int argc, char *argv[]) {
 
     printf("Arquivo mapeado com sucesso: %zu bytes\n", mfile.size);
     printf("Total de linhas no arquivo: %d\n", mfile.line_count);
+    printf("Total indexed lines: %d\n", mfile.total_indexed_lines);
 
     print_first_n_lines(mfile, 10);
 

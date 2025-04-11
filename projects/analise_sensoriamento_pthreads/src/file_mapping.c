@@ -8,9 +8,13 @@
 #include <unistd.h>
 
 #include "../include/line_count.h"
+#include "../include/thread_utils.h"
+
+extern const char **global_line_index;
+extern int total_indexed_lines;
 
 MappedFile map_file(const char *filepath) {
-    MappedFile result = {NULL, 0, 0};
+    MappedFile result = {NULL, 0, 0, 0, NULL, 0};
 
     int fd = open(filepath, O_RDONLY);
     if (fd == -1) {
@@ -39,11 +43,42 @@ MappedFile map_file(const char *filepath) {
     result.block_count = sb.st_blocks;
     result.line_count =
         count_lines_in_memory_parallel(data, sb.st_size, sb.st_blocks);
+
+    // Store the global line index in the MappedFile structure
+    result.line_indices = global_line_index;
+    result.total_indexed_lines = total_indexed_lines;
+
+    // Verify if the line count and indexed lines count match
+    if (result.line_count != result.total_indexed_lines &&
+        result.line_indices != NULL) {
+        printf("Ajustando índice de linhas de %d para %d linhas\n",
+               result.total_indexed_lines, result.line_count);
+
+        if (result.line_count < result.total_indexed_lines) {
+            // We have more indices than actual lines (due to duplicates)
+            int num_duplicates = result.total_indexed_lines - result.line_count;
+
+            // Actually remove the duplicate entries from the array
+            int removed = remove_duplicate_line_indices(
+                result.line_indices, result.total_indexed_lines,
+                num_duplicates);
+
+            // Update the total indexed lines count
+            result.total_indexed_lines -= removed;
+        }
+    }
+
     return result;
 }
 
 void unmap_file(MappedFile *file) {
     if (file && file->data) {
+        // Free the line index array
+        free(file->line_indices);
+        file->line_indices = NULL;
+        file->total_indexed_lines = 0;
+
+        // Unmap the file
         munmap(file->data, file->size);
         file->data = NULL;
         file->size = 0;

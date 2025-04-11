@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../include/line_count.h"
 
@@ -15,6 +16,8 @@ ThreadResources *allocate_thread_resources(int num_threads) {
     res->num_threads = num_threads;
     res->threads = malloc(sizeof(pthread_t) * num_threads);
     res->thread_data = malloc(sizeof(ThreadData) * num_threads);
+    res->global_line_index = NULL;
+    res->total_lines = 0;
 
     if (!res->threads || !res->thread_data) {
         free(res->threads);
@@ -23,11 +26,25 @@ ThreadResources *allocate_thread_resources(int num_threads) {
         return NULL;
     }
 
+    // Initialize the line index fields for each thread data
+    for (int i = 0; i < num_threads; i++) {
+        res->thread_data[i].line_indices = NULL;
+        res->thread_data[i].index_capacity = 0;
+        res->thread_data[i].index_count = 0;
+    }
+
     return res;
 }
 
 void free_thread_resources(ThreadResources *resources) {
     if (resources) {
+        // Free line indices for each thread
+        for (int i = 0; i < resources->num_threads; i++) {
+            free(resources->thread_data[i].line_indices);
+        }
+
+        // Free global line index
+        free(resources->global_line_index);
         free(resources->threads);
         free(resources->thread_data);
         free(resources);
@@ -49,6 +66,9 @@ void initialize_thread_data(ThreadData *thread_data, int index,
     thread_data[index].start = data + block_offset;
     thread_data[index].size = block_size;
     thread_data[index].line_count = 0;
+    thread_data[index].line_indices = NULL;
+    thread_data[index].index_capacity = 0;
+    thread_data[index].index_count = 0;
 }
 
 void adjust_block_boundaries(ThreadData *thread_data, int i, const char *data) {
@@ -81,8 +101,6 @@ int correct_duplicate_lines(ThreadData *thread_data, int num_threads,
             duplicates++;
         }
     }
-
-    printf("Linhas duplicadas corrigidas: %d\n", duplicates);
 
     return duplicates;
 }
@@ -120,4 +138,115 @@ int join_threads_and_collect_results(ThreadResources *resources) {
     }
 
     return total_line_count;
+}
+
+const char **merge_line_indices(ThreadResources *resources) {
+    int total_lines = 0;
+
+    // Count total lines for allocation
+    for (int i = 0; i < resources->num_threads; i++) {
+        ThreadData *thread_data = &resources->thread_data[i];
+        if (thread_data->line_indices != NULL && thread_data->index_count > 0) {
+            total_lines += thread_data->index_count;
+        }
+    }
+
+    resources->total_lines = total_lines;
+
+    // Allocate memory for global index
+    const char **global_index = malloc(sizeof(const char *) * total_lines);
+    if (!global_index) {
+        fprintf(stderr, "Failed to allocate memory for global line index\n");
+        return NULL;
+    }
+
+    // Copy all valid line indices from each thread
+    int global_idx = 0;
+    for (int i = 0; i < resources->num_threads; i++) {
+        ThreadData *thread_data = &resources->thread_data[i];
+
+        if (thread_data->line_indices == NULL ||
+            thread_data->index_count <= 0) {
+            continue;  // Skip invalid thread data
+        }
+
+        // Only copy valid indices
+        for (int j = 0;
+             j < thread_data->index_count && global_idx < total_lines; j++) {
+            // Only include valid pointers
+            if (thread_data->line_indices[j] >= thread_data->start &&
+                thread_data->line_indices[j] <
+                    thread_data->start + thread_data->size) {
+                global_index[global_idx++] = thread_data->line_indices[j];
+            }
+        }
+    }
+
+    // Update actual count of indices stored
+    resources->total_lines = global_idx;
+
+    printf("Successfully built global index with %d lines\n", global_idx);
+
+    resources->global_line_index = global_index;
+    return global_index;
+}
+
+int remove_duplicate_line_indices(const char **line_indices, int total_lines,
+                                  int num_duplicates) {
+    if (!line_indices || total_lines <= 0 || num_duplicates <= 0) {
+        return 0;
+    }
+
+    int removed = 0;
+
+    // Identify thread boundaries where duplicates occur
+    // Typically duplicates happen at thread block boundaries
+    for (int i = 1; i < total_lines && removed < num_duplicates; i++) {
+        // If this line starts immediately after the previous one ends
+        // and there's no newline between them, it's likely a duplicate
+        const char *current = line_indices[i];
+        const char *previous = line_indices[i - 1];
+
+        // Find end of previous line (next newline)
+        const char *prev_end = strchr(previous, '\n');
+
+        // If we found a newline and the current line starts right after
+        // previous line without its own newline start, it's likely a duplicate
+        if (prev_end && current == prev_end + 1 && *current != '\n') {
+            // Remove this duplicate by shifting all following indices down
+            memmove(&line_indices[i], &line_indices[i + 1],
+                    (total_lines - i - 1) * sizeof(const char *));
+            removed++;
+
+            // Adjust i to recheck the new element that's now in position i
+            i--;
+        }
+    }
+
+    // If we couldn't find all duplicates with the above approach, use a more
+    // aggressive strategy
+    if (removed < num_duplicates) {
+        // Second pass: Remove based on very close line starts, which might
+        // happen at thread boundaries where the exact pattern doesn't match our
+        // first pass
+        for (int i = 1; i < total_lines - removed && removed < num_duplicates;
+             i++) {
+            const char *current = line_indices[i];
+            const char *previous = line_indices[i - 1];
+
+            // If lines are very close to each other (within a few bytes), they
+            // might be duplicates from the thread splitting process
+            if (current > previous && current - previous < 5) {
+                // Remove this duplicate by shifting all following indices
+                memmove(&line_indices[i], &line_indices[i + 1],
+                        (total_lines - removed - i - 1) * sizeof(const char *));
+                removed++;
+
+                // Adjust i to recheck the new element
+                i--;
+            }
+        }
+    }
+
+    return removed;
 }

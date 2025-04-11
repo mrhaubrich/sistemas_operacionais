@@ -8,6 +8,8 @@ typedef struct {
     size_t size;
     size_t block_count;
     int line_count;
+    const char **line_indices;  // Global array of all line pointers
+    int total_indexed_lines;    // Total number of lines indexed
 } MappedFile;
 
 MappedFile map_file(const char *filepath);
