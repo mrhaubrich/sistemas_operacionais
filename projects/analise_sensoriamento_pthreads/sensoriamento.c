@@ -1,32 +1,35 @@
+#include <fcntl.h>  // Para flags de abertura de arquivos
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>  // Para mapeamento de memória
+#include <sys/stat.h>  // Para estatísticas de arquivos
 #include <sys/sysinfo.h>
+#include <unistd.h>  // Para close()
 
 #define SEPARATOR '|'
 #define EXPECTED_HEADERS \
     'id|device|contagem|data|temperatura|umidade|luminosidade|ruido|eco2|etvoc|latitude|longitude'
 #define BUFFER_SIZE \
-    65536  // 64 KB buffer (will be used for chunks for multithreading)
+    65536  // Buffer de 64 KB (será usado para chunks em multithread)
 
-typedef struct Line {
-    char *line;
-    struct Line *next;
-} Line;
+// Estrutura para armazenar o arquivo mapeado em memória
+typedef struct {
+    char *data;      // Ponteiro para os dados mapeados
+    size_t size;     // Tamanho dos dados mapeados
+    int line_count;  // Total de linhas no arquivo
+} MappedFile;
 
 int get_available_number_of_processors(void);
 bool validate_csv_extension(const char *filename);
 bool validate_args(int argc, char *argv[]);
-Line *read_file(FILE *file);  // Changed return type to Line*
-
-// Linked List management functions
-Line *create_line(char *line_content);
-void add_line(Line **head, char *line_content);
-void free_lines(Line *head);
-int count_lines(Line *head);
-void print_first_n_lines(Line *head, int n);  // Add this line
+MappedFile map_file(const char *filepath);
+void unmap_file(MappedFile *file);
+void print_first_n_lines(MappedFile file, int n);
+char *get_line_at_offset(MappedFile file, size_t *offset);
+int count_lines_in_memory(const char *data, size_t size);
 
 int main(int argc, char *argv[]) {
     if (!validate_args(argc, argv)) {
@@ -39,24 +42,27 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    FILE *file = fopen(filepath, "r");
-    if (!file) {
-        perror("Erro ao abrir o arquivo");
-        return EXIT_FAILURE;
-    }
-
     int num_processors = get_available_number_of_processors();
     printf("Processadores disponíveis: %d\n", num_processors);
 
+    // Mapeia o arquivo para a memória
+    MappedFile mfile = map_file(filepath);
+    if (mfile.data == NULL) {
+        fprintf(stderr, "Falha ao mapear o arquivo\n");
+        return EXIT_FAILURE;
+    }
+
+    printf("Arquivo mapeado com sucesso: %zu bytes\n", mfile.size);
+    printf("Total de linhas no arquivo: %d\n", mfile.line_count);
+
+    // Imprime as primeiras 10 linhas para verificação
+    print_first_n_lines(mfile, 10);
+
     // Aqui você pode começar a montar a lógica de dividir o trabalho com
-    // pthreads Por exemplo: contar linhas, dividir range entre threads, etc.
+    // pthreads. Por exemplo: contar linhas, dividir range entre threads, etc.
 
-    Line *lines;
-    lines = read_file(file);
-
-    print_first_n_lines(lines, 10);
-
-    fclose(file);
+    // Limpeza
+    unmap_file(&mfile);
     return EXIT_SUCCESS;
 }
 
@@ -80,151 +86,159 @@ bool validate_args(int argc, char *argv[]) {
 }
 
 /**
- * Reads the contents of a file and converts it to a linked list of lines
- * @param file The file pointer to read from
- * @return Pointer to the head of a linked list of lines, or NULL if error
+ * Conta o número de linhas em um bloco de memória
+ * @param data Ponteiro para o início do bloco de memória
+ * @param size Tamanho do bloco de memória
+ * @return Número de linhas no bloco
  */
-Line *read_file(FILE *file) {
-    if (!file) return NULL;
+int count_lines_in_memory(const char *data, size_t size) {
+    int line_count = 0;
+    const char *p = data;
+    const char *end = data + size;
 
-    // Reset file position to the beginning
-    rewind(file);
-
-    Line *head = NULL;
-    char buffer[BUFFER_SIZE];
-    char line_buffer[BUFFER_SIZE];
-    size_t bytes_read;
-    size_t line_pos = 0;
-
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        for (size_t i = 0; i < bytes_read; i++) {
-            if (buffer[i] == '\n') {
-                // Found end of line, add it to our linked list
-                line_buffer[line_pos] = '\0';  // Null-terminate the string
-
-                // Skip empty lines
-                if (line_pos > 0) {
-                    add_line(&head, line_buffer);
-                }
-
-                line_pos = 0;  // Reset for the next line
-            } else if (line_pos < sizeof(line_buffer) - 1) {
-                // Add character to current line
-                line_buffer[line_pos++] = buffer[i];
+    // Processando blocos maiores para melhor eficiência
+    while (p < end) {
+        // Busca caracteres de nova linha em blocos
+        const char *nl = memchr(p, '\n', end - p);
+        if (nl) {
+            line_count++;
+            p = nl + 1;
+        } else {
+            // Se não encontrou mais \n, mas ainda há dados, é a última linha
+            if (p < end) {
+                line_count++;
             }
-            // Else: line buffer overflow, we'll truncate the line
+            break;
         }
     }
 
-    // Handle the last line if it doesn't end with a newline
-    if (line_pos > 0) {
-        line_buffer[line_pos] = '\0';
-        add_line(&head, line_buffer);
-    }
-
-    return head;
+    return line_count;
 }
 
 /**
- * Creates a new Line node with the given content
- * @param line_content The content to store in the line (will be copied)
- * @return Pointer to the newly created Line or NULL if memory allocation failed
+ * Mapeia o arquivo inteiro para a memória usando mmap
+ * @param filepath Caminho para o arquivo a ser mapeado
+ * @return Estrutura MappedFile contendo os dados mapeados e o tamanho
  */
-Line *create_line(char *line_content) {
-    Line *new_line = (Line *)malloc(sizeof(Line));
-    if (new_line == NULL) {
-        return NULL;
+MappedFile map_file(const char *filepath) {
+    MappedFile result = {NULL, 0, 0};
+
+    int fd = open(filepath, O_RDONLY);
+    if (fd == -1) {
+        perror("Erro ao abrir o arquivo para mapeamento");
+        return result;
     }
 
-    new_line->line = strdup(line_content);
-    if (new_line->line == NULL) {
-        free(new_line);
-        return NULL;
+    // Obtém o tamanho do arquivo
+    struct stat sb;
+    if (fstat(fd, &sb) == -1) {
+        perror("Erro ao obter o tamanho do arquivo");
+        close(fd);
+        return result;
     }
 
-    new_line->next = NULL;
-    return new_line;
+    // Mapeia o arquivo para a memória
+    char *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (data == MAP_FAILED) {
+        perror("Erro ao mapear o arquivo");
+        close(fd);
+        return result;
+    }
+
+    // Fecha o descritor de arquivo (o mapeamento permanece válido)
+    close(fd);
+
+    result.data = data;
+    result.size = sb.st_size;
+    result.line_count = count_lines_in_memory(data, sb.st_size);
+    return result;
 }
 
 /**
- * Adds a new line at the end of the linked list
- * @param head Pointer to the head pointer of the list
- * @param line_content The content to store in the new line
+ * Desmapeia o arquivo da memória
+ * @param file Ponteiro para a estrutura MappedFile
  */
-void add_line(Line **head, char *line_content) {
-    Line *new_line = create_line(line_content);
-    if (new_line == NULL) {
-        return;  // Memory allocation failed
+void unmap_file(MappedFile *file) {
+    if (file && file->data) {
+        munmap(file->data, file->size);
+        file->data = NULL;
+        file->size = 0;
+        file->line_count = 0;
+    }
+}
+
+/**
+ * Obtém uma linha do arquivo mapeado começando no offset fornecido
+ * @param file A estrutura do arquivo mapeado
+ * @param offset Ponteiro para o offset atual (será atualizado)
+ * @return Ponteiro para o início da linha (não terminada em null)
+ */
+char *get_line_at_offset(MappedFile file, size_t *offset) {
+    if (*offset >= file.size) {
+        return NULL;  // Fim do arquivo
     }
 
-    if (*head == NULL) {
-        *head = new_line;
+    char *line_start = file.data + *offset;
+
+    // Encontra o fim da linha
+    while (*offset < file.size && file.data[*offset] != '\n') {
+        (*offset)++;
+    }
+
+    // Avança além do caractere de nova linha
+    if (*offset < file.size) {
+        (*offset)++;
+    }
+
+    return line_start;
+}
+
+/**
+ * Imprime as primeiras n linhas do arquivo mapeado
+ * @param file A estrutura do arquivo mapeado
+ * @param n Número de linhas a serem impressas (se n <= 0, imprime todas as
+ * linhas)
+ */
+void print_first_n_lines(MappedFile file, int n) {
+    if (file.data == NULL || file.size == 0) {
+        printf("Não há dados para exibir.\n");
         return;
     }
 
-    Line *current = *head;
-    while (current->next != NULL) {
-        current = current->next;
-    }
-
-    current->next = new_line;
-}
-
-/**
- * Frees all memory allocated for the linked list
- * @param head Pointer to the head of the list
- */
-void free_lines(Line *head) {
-    Line *current = head;
-    Line *next;
-
-    while (current != NULL) {
-        next = current->next;
-        free(current->line);
-        free(current);
-        current = next;
-    }
-}
-
-/**
- * Counts the number of lines in the linked list
- * @param head Pointer to the head of the list
- * @return Number of lines in the list
- */
-int count_lines(Line *head) {
-    int count = 0;
-    Line *current = head;
-
-    while (current != NULL) {
-        count++;
-        current = current->next;
-    }
-
-    return count;
-}
-
-/**
- * Prints the first n lines from the linked list
- * @param head Pointer to the head of the list
- * @param n Number of lines to print (if n <= 0, prints all lines)
- */
-void print_first_n_lines(Line *head, int n) {
-    if (head == NULL) {
-        printf("No lines to display.\n");
-        return;
-    }
-
-    Line *current = head;
+    size_t offset = 0;
     int count = 0;
 
-    while (current != NULL && (n <= 0 || count < n)) {
-        printf("%s\n", current->line);
-        current = current->next;
+    // Usamos o line_count já calculado durante o mapeamento
+    int total_lines = file.line_count;
+
+    // Imprime as primeiras n linhas
+    while (offset < file.size && (n <= 0 || count < n)) {
+        size_t line_start = offset;
+
+        // Encontra o fim desta linha
+        while (offset < file.size && file.data[offset] != '\n') {
+            offset++;
+        }
+
+        // Imprime esta linha (cria uma string temporária terminada em null)
+        int line_length = offset - line_start;
+        char *temp_line = malloc(line_length + 1);
+        if (temp_line) {
+            memcpy(temp_line, file.data + line_start, line_length);
+            temp_line[line_length] = '\0';
+            printf("%s\n", temp_line);
+            free(temp_line);
+        }
+
+        // Avança além da nova linha
+        if (offset < file.size) {
+            offset++;
+        }
+
         count++;
     }
 
-    int total = count_lines(head);
-    if (n > 0 && total > n) {
-        printf("... (%d more lines not shown)\n", total - n);
+    if (n > 0 && total_lines > n) {
+        printf("... (%d linhas adicionais não exibidas)\n", total_lines - n);
     }
 }
