@@ -374,18 +374,21 @@ void initialize_thread_data(ThreadData *thread_data, int index,
  */
 void adjust_block_boundaries(ThreadData *thread_data, int i, const char *data) {
     if (i > 0) {
-        const char *block_start = thread_data[i].start;
-
-        // Retrocede até encontrar um '\n' ou o início do arquivo
-        while (block_start > data && *(block_start - 1) != '\n') {
-            block_start--;
+        const char *ptr = thread_data[i].start;
+        // Avança o ponteiro até encontrar o caractere de nova linha que termina
+        // a linha anterior
+        while (ptr < data + thread_data[i].size && *ptr != '\n') {
+            ptr++;
         }
-
-        // Atualiza os ponteiros e tamanhos
-        size_t adjustment = thread_data[i].start - block_start;
-        thread_data[i].start = block_start;
-        thread_data[i].size += adjustment;
-        thread_data[i - 1].size -= adjustment;
+        // Se encontrou uma nova linha, avança para depois dela para garantir
+        // que o bloco comece no início de uma nova linha
+        if (ptr < data + thread_data[i].size && *ptr == '\n') {
+            ptr++;
+        }
+        size_t adjustment = ptr - thread_data[i].start;
+        thread_data[i].start = ptr;
+        thread_data[i].size -= adjustment;
+        thread_data[i - 1].size += adjustment;
     }
 }
 
@@ -432,19 +435,26 @@ int start_threads(ThreadResources *resources, const char *data, size_t size) {
         size_t block_size =
             calculate_block_size(i, resources->num_threads, size);
 
+        // Initialize the thread data for this block using the current offset.
         initialize_thread_data(resources->thread_data, i, data, block_size,
                                current_offset);
+
+        // Adjust the block so it starts from the beginning of the next line.
         adjust_block_boundaries(resources->thread_data, i, data);
 
+        // Create the thread to count lines in this block.
         if (pthread_create(&resources->threads[i], NULL, count_lines_worker,
                            &resources->thread_data[i]) != 0) {
             fprintf(stderr, "Falha ao criar thread %d\n", i);
             return -1;
         }
 
-        current_offset += block_size;
+        // Update current_offset to the adjusted end of the block.
+        // Calculate the new offset as the difference between the thread's
+        // starting pointer and the data pointer plus the adjusted size.
+        current_offset = (resources->thread_data[i].start - data) +
+                         resources->thread_data[i].size;
     }
-
     return 0;
 }
 
