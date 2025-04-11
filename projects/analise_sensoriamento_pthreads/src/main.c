@@ -7,70 +7,72 @@
 #include "../include/utils.h"
 
 /**
- * Main entry point for the CSV file processing program
+ * Ponto de entrada principal para o programa de processamento de arquivos CSV
  */
 int main(int argc, char *argv[]) {
-    printf("CSV File Processor - Using pthreads for parallel processing\n");
+    printf(
+        "Processador de Arquivos CSV - Usando pthreads para processamento "
+        "paralelo\n");
     printf("----------------------------------------------------------\n");
 
-    // Validate command line arguments
+    // Validar argumentos da linha de comando
     if (!validate_args(argc, argv)) {
         return EXIT_FAILURE;
     }
 
     const char *filepath = argv[1];
 
-    // Validate file extension
+    // Validar extensão do arquivo
     if (!validate_csv_extension(filepath)) {
         return EXIT_FAILURE;
     }
 
-    // Print system information
+    // Imprimir informações do sistema
     int num_processors = get_available_number_of_processors();
-    printf("Available processors: %d\n", num_processors);
-    printf("Processing file: %s\n\n", filepath);
+    printf("Processadores disponíveis: %d\n", num_processors);
+    printf("Processando arquivo: %s\n\n", filepath);
 
-    // Record the start time
+    // Registrar o tempo de início
     clock_t start_time = clock();
 
-    // Map file into memory
+    // Mapear arquivo na memória
     MappedFile mfile = map_file(filepath);
     if (mfile.data == NULL) {
-        fprintf(stderr, "Failed to map file\n");
+        fprintf(stderr, "Falha ao mapear o arquivo\n");
         return EXIT_FAILURE;
     }
 
-    // Calculate elapsed time
+    // Calcular o tempo decorrido
     clock_t end_time = clock();
     double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
-    // Print file information
-    printf("\nProcessing completed in %.3f seconds\n", elapsed_time);
+    // Imprimir informações do arquivo
+    printf("\nProcessamento concluído em %.3f segundos\n", elapsed_time);
     print_file_info(&mfile);
 
-    // Print a sample of the file content
-    printf("\nFile Content Sample:\n");
+    // Imprimir uma amostra do conteúdo do arquivo
+    printf("\nAmostra do Conteúdo do Arquivo:\n");
     printf("-------------------\n");
     print_first_n_lines(mfile, 10);
 
-    // Add additional command functionality: allow displaying specific line
-    // ranges
+    // Adicionar funcionalidade adicional de comando: permitir exibir intervalos
+    // específicos de linhas
     if (argc > 3 && strcmp(argv[2], "--range") == 0) {
         int start_line = atoi(argv[3]);
-        int num_lines = 10;  // Default
+        int num_lines = 10;  // Padrão
 
         if (argc > 4) {
             num_lines = atoi(argv[4]);
         }
 
-        printf("\nDisplaying Custom Line Range:\n");
+        printf("\nExibindo Intervalo Personalizado de Linhas:\n");
         print_lines_range(mfile, start_line - 1,
-                          num_lines);  // Convert to 0-based
+                          num_lines);  // Converter para base 0
     }
 
-    // Cleanup
+    // Limpeza
     unmap_file(&mfile);
-    printf("\nFile unmapped and resources freed\n");
+    printf("\nArquivo desmapeado e recursos liberados\n");
 
     return EXIT_SUCCESS;
 }

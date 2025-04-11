@@ -3,7 +3,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>  // Added for memchr and memcpy
+#include <string.h>  // Adicionado para memchr e memcpy
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -12,78 +12,80 @@
 #include "../include/thread_utils.h"
 
 /**
- * Maps a file into memory and builds a line index for fast access
- * @param filepath Path to the file to map
- * @return MappedFile structure containing the mapping and line information
+ * Mapeia um arquivo na memória e constrói um índice de linhas para acesso
+ * rápido
+ * @param filepath Caminho para o arquivo a ser mapeado
+ * @return Estrutura MappedFile contendo o mapeamento e informações de linha
  */
 MappedFile map_file(const char *filepath) {
     MappedFile result = {NULL, 0, 0, 0, NULL, 0};
 
     if (!filepath) {
-        fprintf(stderr, "Invalid file path\n");
+        fprintf(stderr, "Caminho do arquivo inválido\n");
         return result;
     }
 
     int fd = open(filepath, O_RDONLY);
     if (fd == -1) {
-        perror("Error opening file for mapping");
+        perror("Erro ao abrir o arquivo para mapeamento");
         return result;
     }
 
     struct stat sb;
     if (fstat(fd, &sb) == -1) {
-        perror("Error getting file size");
+        perror("Erro ao obter o tamanho do arquivo");
         close(fd);
         return result;
     }
 
     if (sb.st_size == 0) {
-        fprintf(stderr, "File is empty\n");
+        fprintf(stderr, "Arquivo está vazio\n");
         close(fd);
         return result;
     }
 
     char *data = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (data == MAP_FAILED) {
-        perror("Error mapping file");
+        perror("Erro ao mapear o arquivo");
         close(fd);
         return result;
     }
 
-    close(fd);  // Close file descriptor as it's no longer needed after mapping
+    close(fd);  // Fecha o descritor de arquivo, pois não é mais necessário após
+                // o mapeamento
 
-    // Initialize the result with the mapped data
+    // Inicializa o resultado com os dados mapeados
     result.data = data;
     result.size = sb.st_size;
     result.block_count = sb.st_blocks;
 
-    // Count lines and build line index in parallel
+    // Conta linhas e constrói índice de linhas em paralelo
     const char **line_indices = NULL;
     int total_indexed_lines = 0;
 
     result.line_count = count_lines_in_memory_parallel(
         data, sb.st_size, &line_indices, &total_indexed_lines);
 
-    // Store the line index in the MappedFile structure
+    // Armazena o índice de linhas na estrutura MappedFile
     result.line_indices = line_indices;
     result.total_indexed_lines = total_indexed_lines;
 
-    // Verify if the line count and indexed lines count match
+    // Verifica se a contagem de linhas e o número de linhas indexadas coincidem
     if (result.line_count != result.total_indexed_lines &&
         result.line_indices != NULL) {
-        printf("Adjusting line index from %d to %d lines\n",
+        printf("Ajustando índice de linhas de %d para %d linhas\n",
                result.total_indexed_lines, result.line_count);
 
         if (result.line_count < result.total_indexed_lines) {
-            // We have more indices than actual lines (due to duplicates)
+            // Temos mais índices do que linhas reais (devido a duplicatas)
             int num_duplicates = result.total_indexed_lines - result.line_count;
 
-            // Remove duplicate entries from the array
+            // Remove entradas duplicadas do array
             int removed = remove_duplicate_line_indices(
                 result.line_indices, result.total_indexed_lines,
                 num_duplicates);
 
-            // Update the total indexed lines count
+            // Atualiza a contagem total de linhas indexadas
             result.total_indexed_lines -= removed;
         }
     }
@@ -92,20 +94,20 @@ MappedFile map_file(const char *filepath) {
 }
 
 /**
- * Unmaps a previously mapped file and frees associated resources
- * @param file Pointer to the MappedFile structure
+ * Desmapeia um arquivo previamente mapeado e libera os recursos associados
+ * @param file Ponteiro para a estrutura MappedFile
  */
 void unmap_file(MappedFile *file) {
     if (!file || !file->data) {
         return;
     }
 
-    // Free the line index array
+    // Libera o array de índice de linhas
     free(file->line_indices);
     file->line_indices = NULL;
     file->total_indexed_lines = 0;
 
-    // Unmap the file
+    // Desmapeia o arquivo
     munmap(file->data, file->size);
     file->data = NULL;
     file->size = 0;
@@ -114,13 +116,13 @@ void unmap_file(MappedFile *file) {
 }
 
 /**
- * Gets a line from the mapped file by line number (0-based)
- * @param file Mapped file structure
- * @param line_number The 0-based line number to retrieve
- * @param line_length Pointer to store the length of the line (without null
- * terminator)
- * @return Allocated string containing the line (caller must free) or NULL on
- * error
+ * Obtém uma linha do arquivo mapeado pelo número da linha (baseado em 0)
+ * @param file Estrutura do arquivo mapeado
+ * @param line_number O número da linha baseado em 0 para recuperar
+ * @param line_length Ponteiro para armazenar o comprimento da linha (sem
+ * terminador nulo)
+ * @return String alocada contendo a linha (o chamador deve liberar) ou NULL em
+ * caso de erro
  */
 char *get_line(const MappedFile *file, int line_number, int *line_length) {
     if (!file || !file->data || line_number < 0 ||
@@ -132,16 +134,16 @@ char *get_line(const MappedFile *file, int line_number, int *line_length) {
     const char *line_start = NULL;
     const char *line_end = NULL;
 
-    // Fast path: use the line index if available
+    // Caminho rápido: usa o índice de linhas, se disponível
     if (file->line_indices && line_number < file->total_indexed_lines) {
         line_start = file->line_indices[line_number];
 
-        // Find the end of this line (next newline or end of file)
+        // Encontra o final desta linha (próxima nova linha ou fim do arquivo)
         line_end =
             memchr(line_start, '\n', file->data + file->size - line_start);
         if (!line_end) line_end = file->data + file->size;
     } else {
-        // Slow path: scan through the file
+        // Caminho lento: escaneia o arquivo
         const char *p = file->data;
         const char *end = file->data + file->size;
         int current_line = 0;
@@ -166,7 +168,7 @@ char *get_line(const MappedFile *file, int line_number, int *line_length) {
         if (!line_end) line_end = end;
     }
 
-    // Calculate line length and allocate memory
+    // Calcula o comprimento da linha e aloca memória
     int len = line_end - line_start;
     char *result = malloc(len + 1);
 
@@ -175,7 +177,7 @@ char *get_line(const MappedFile *file, int line_number, int *line_length) {
         return NULL;
     }
 
-    // Copy the line contents
+    // Copia o conteúdo da linha
     memcpy(result, line_start, len);
     result[len] = '\0';
 
