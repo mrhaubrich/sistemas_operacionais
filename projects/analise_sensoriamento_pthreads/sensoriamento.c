@@ -17,9 +17,10 @@
 
 // Estrutura para armazenar o arquivo mapeado em memória
 typedef struct {
-    char *data;      // Ponteiro para os dados mapeados
-    size_t size;     // Tamanho dos dados mapeados
-    int line_count;  // Total de linhas no arquivo
+    char *data;          // Ponteiro para os dados mapeados
+    size_t size;         // Tamanho dos dados mapeados
+    size_t block_count;  // Total de blocos no arquivo
+    int line_count;      // Total de linhas no arquivo
 } MappedFile;
 
 int get_available_number_of_processors(void);
@@ -30,6 +31,18 @@ void unmap_file(MappedFile *file);
 void print_first_n_lines(MappedFile file, int n);
 char *get_line_at_offset(MappedFile file, size_t *offset);
 int count_lines_in_memory(const char *data, size_t size);
+int count_lines_in_memory_parallel(const char *data, size_t size,
+                                   size_t block_count);
+
+// Estrutura de dados para passar informações às threads
+typedef struct {
+    const char *start;  // Ponteiro para o início do bloco
+    size_t size;        // Tamanho do bloco a processar
+    int line_count;     // Contagem local de linhas para este bloco
+} ThreadData;
+
+// Mutex para proteção do contador compartilhado
+pthread_mutex_t line_count_mutex;
 
 int main(int argc, char *argv[]) {
     if (!validate_args(argc, argv)) {
@@ -150,7 +163,9 @@ MappedFile map_file(const char *filepath) {
 
     result.data = data;
     result.size = sb.st_size;
-    result.line_count = count_lines_in_memory(data, sb.st_size);
+    result.block_count = sb.st_blocks;
+    result.line_count =
+        count_lines_in_memory_parallel(data, sb.st_size, sb.st_blocks);
     return result;
 }
 
@@ -241,4 +256,264 @@ void print_first_n_lines(MappedFile file, int n) {
     if (n > 0 && total_lines > n) {
         printf("... (%d linhas adicionais não exibidas)\n", total_lines - n);
     }
+}
+
+/**
+ * Função executada pelas threads para contar linhas em um bloco específico
+ * @param arg Ponteiro para a estrutura ThreadData
+ * @return NULL
+ */
+void *count_lines_worker(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    int local_count = 0;
+    const char *p = data->start;
+    const char *end = p + data->size;
+
+    // Conta linhas no bloco designado
+    while (p < end) {
+        const char *nl = memchr(p, '\n', end - p);
+        if (nl) {
+            local_count++;
+            p = nl + 1;
+        } else {
+            // Se não encontrou mais \n, mas ainda há dados, é a última linha
+            if (p < end) {
+                local_count++;
+            }
+            break;
+        }
+    }
+
+    // Armazena a contagem local no resultado da thread
+    data->line_count = local_count;
+
+    return NULL;
+}
+
+/**
+ * Aloca recursos para threads e inicializa dados
+ * @param num_threads Número de threads a serem criadas
+ * @return Estrutura com ponteiros para threads e dados, NULL em caso de falha
+ */
+typedef struct {
+    pthread_t *threads;
+    ThreadData *thread_data;
+    int num_threads;
+} ThreadResources;
+
+ThreadResources *allocate_thread_resources(int num_threads) {
+    ThreadResources *res = malloc(sizeof(ThreadResources));
+    if (!res) {
+        return NULL;
+    }
+
+    res->num_threads = num_threads;
+    res->threads = malloc(sizeof(pthread_t) * num_threads);
+    res->thread_data = malloc(sizeof(ThreadData) * num_threads);
+
+    if (!res->threads || !res->thread_data) {
+        free(res->threads);
+        free(res->thread_data);
+        free(res);
+        return NULL;
+    }
+
+    return res;
+}
+
+/**
+ * Libera recursos alocados para threads
+ * @param resources Ponteiro para a estrutura de recursos
+ */
+void free_thread_resources(ThreadResources *resources) {
+    if (resources) {
+        free(resources->threads);
+        free(resources->thread_data);
+        free(resources);
+    }
+}
+
+/**
+ * Calcula o tamanho do bloco para cada thread
+ * @param thread_index Índice da thread
+ * @param num_threads Número total de threads
+ * @param total_size Tamanho total dos dados
+ * @return Tamanho do bloco para esta thread
+ */
+size_t calculate_block_size(int thread_index, int num_threads,
+                            size_t total_size) {
+    size_t block_size = total_size / num_threads;
+    size_t remaining = total_size % num_threads;
+
+    return (thread_index == num_threads - 1) ? block_size + remaining
+                                             : block_size;
+}
+
+/**
+ * Inicializa os dados para uma thread
+ * @param thread_data Array de dados de threads
+ * @param index Índice da thread
+ * @param data Início dos dados completos
+ * @param block_size Tamanho do bloco para esta thread
+ * @param block_offset Deslocamento do início do bloco
+ */
+void initialize_thread_data(ThreadData *thread_data, int index,
+                            const char *data, size_t block_size,
+                            size_t block_offset) {
+    thread_data[index].start = data + block_offset;
+    thread_data[index].size = block_size;
+    thread_data[index].line_count = 0;
+}
+
+/**
+ * Ajusta os limites dos blocos para garantir que cada thread comece no início
+ * de uma linha
+ * @param thread_data Array de dados de threads
+ * @param i Índice da thread atual
+ * @param data Ponteiro para o início de todos os dados
+ */
+void adjust_block_boundaries(ThreadData *thread_data, int i, const char *data) {
+    if (i > 0) {
+        const char *block_start = thread_data[i].start;
+
+        // Retrocede até encontrar um '\n' ou o início do arquivo
+        while (block_start > data && *(block_start - 1) != '\n') {
+            block_start--;
+        }
+
+        // Atualiza os ponteiros e tamanhos
+        size_t adjustment = thread_data[i].start - block_start;
+        thread_data[i].start = block_start;
+        thread_data[i].size += adjustment;
+        thread_data[i - 1].size -= adjustment;
+    }
+}
+
+/**
+ * Corrige a contagem de linhas duplicadas nas fronteiras dos blocos
+ * @param thread_data Array de dados de threads
+ * @param num_threads Número total de threads
+ * @param data Ponteiro para o início de todos os dados
+ * @param size Tamanho total dos dados
+ * @return Número de linhas duplicadas
+ */
+int correct_duplicate_lines(ThreadData *thread_data, int num_threads,
+                            const char *data, size_t size) {
+    int duplicates = 0;
+
+    for (int i = 1; i < num_threads; i++) {
+        // Verifica se uma linha foi dividida e contada duas vezes
+        const char *prev_end =
+            thread_data[i - 1].start + thread_data[i - 1].size - 1;
+
+        if ((prev_end > data) && (*prev_end != '\n') &&
+            (thread_data[i].start < data + size) &&
+            (*(thread_data[i].start) != '\n')) {
+            duplicates++;
+        }
+    }
+
+    printf("Linhas duplicadas corrigidas: %d\n", duplicates);
+
+    return duplicates;
+}
+
+/**
+ * Cria e inicia as threads para processar blocos de dados
+ * @param resources Recursos alocados para threads
+ * @param data Ponteiro para os dados completos
+ * @param size Tamanho total dos dados
+ * @return 0 em caso de sucesso, -1 em caso de falha
+ */
+int start_threads(ThreadResources *resources, const char *data, size_t size) {
+    size_t current_offset = 0;
+
+    for (int i = 0; i < resources->num_threads; i++) {
+        size_t block_size =
+            calculate_block_size(i, resources->num_threads, size);
+
+        initialize_thread_data(resources->thread_data, i, data, block_size,
+                               current_offset);
+        adjust_block_boundaries(resources->thread_data, i, data);
+
+        if (pthread_create(&resources->threads[i], NULL, count_lines_worker,
+                           &resources->thread_data[i]) != 0) {
+            fprintf(stderr, "Falha ao criar thread %d\n", i);
+            return -1;
+        }
+
+        current_offset += block_size;
+    }
+
+    return 0;
+}
+
+/**
+ * Aguarda todas as threads terminarem e coleta os resultados
+ * @param resources Recursos das threads
+ * @return Total de linhas contadas por todas as threads
+ */
+int join_threads_and_collect_results(ThreadResources *resources) {
+    int total_line_count = 0;
+
+    for (int i = 0; i < resources->num_threads; i++) {
+        pthread_join(resources->threads[i], NULL);
+        total_line_count += resources->thread_data[i].line_count;
+    }
+
+    return total_line_count;
+}
+
+/**
+ * Conta o número de linhas em um bloco de memória (em paralelo)
+ * @param data Ponteiro para o início do bloco de memória
+ * @param size Tamanho do bloco de memória
+ * @return Número de linhas no bloco
+ */
+int count_lines_in_memory_parallel(const char *data, size_t size,
+                                   size_t block_count) {
+    int total_line_count = 0;
+    const int num_threads = get_available_number_of_processors();
+
+    // Aloca recursos para threads
+    ThreadResources *resources = allocate_thread_resources(num_threads);
+    if (!resources) {
+        fprintf(stderr,
+                "Falha na alocação de memória para threads\nUsando fallback "
+                "para versão serial\n");
+        return count_lines_in_memory(data,
+                                     size);  // Fallback para versão serial
+    }
+
+    // Inicializa o mutex
+    if (pthread_mutex_init(&line_count_mutex, NULL) != 0) {
+        fprintf(stderr,
+                "Falha na inicialização do mutex\nUsando fallback "
+                "para versão serial\n");
+        free_thread_resources(resources);
+        return count_lines_in_memory(data,
+                                     size);  // Fallback para versão serial
+    }
+
+    printf("Contando linhas em paralelo com %d threads\n", num_threads);
+
+    // Inicia as threads
+    if (start_threads(resources, data, size) != 0) {
+        // Ainda será possível coletar resultados das threads criadas com
+        // sucesso
+    }
+
+    // Coleta resultados
+    total_line_count = join_threads_and_collect_results(resources);
+
+    // Corrige possíveis linhas duplicadas nas fronteiras dos blocos
+    int duplicates = correct_duplicate_lines(resources->thread_data,
+                                             num_threads, data, size);
+    total_line_count -= duplicates;
+
+    // Libera os recursos
+    pthread_mutex_destroy(&line_count_mutex);
+    free_thread_resources(resources);
+
+    return total_line_count;
 }
