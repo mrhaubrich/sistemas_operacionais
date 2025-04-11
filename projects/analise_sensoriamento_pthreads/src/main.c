@@ -32,9 +32,6 @@ int main(int argc, char *argv[]) {
     printf("Processadores disponíveis: %d\n", num_processors);
     printf("Processando arquivo: %s\n\n", filepath);
 
-    // Registrar o tempo de início
-    clock_t start_time = clock();
-
     // Mapear arquivo na memória
     MappedFile mfile = map_file(filepath);
     if (mfile.data == NULL) {
@@ -42,12 +39,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Calcular o tempo decorrido
-    clock_t end_time = clock();
-    double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
-
     // Imprimir informações do arquivo
-    printf("\nProcessamento concluído em %.3f segundos\n", elapsed_time);
     print_file_info(&mfile);
 
     // Imprimir uma amostra do conteúdo do arquivo
