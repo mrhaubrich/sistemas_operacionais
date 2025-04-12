@@ -33,7 +33,7 @@ bool validate_csv_extension(const char *filename) {
  * @return true se os argumentos são válidos, false caso contrário
  */
 bool validate_args(int argc, char *argv[]) {
-    const bool is_valid = argc == 2;
+    const bool is_valid = argc > 1;
 
     if (!is_valid) {
         fprintf(stderr, "Uso: %s <caminho_para_arquivo_csv>\n", argv[0]);
