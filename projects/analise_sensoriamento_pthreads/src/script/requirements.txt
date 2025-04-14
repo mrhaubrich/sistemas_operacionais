@@ -1,2 +1,2 @@
-polars==1.27.1
-numpy==2.2.4
+polars[numpy]==1.27.1
+# numpy==2.2.4
