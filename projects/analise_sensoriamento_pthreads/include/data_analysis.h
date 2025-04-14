@@ -56,4 +56,29 @@ pid_t launch_python_process(const UDSInfo *uds_info, const char *script_path);
  */
 int establish_uds_server(const UDSInfo *uds_info);
 
+/**
+ * Sends a CSV chunk over a UDS connection.
+ * @param uds_info Pointer to the UDSInfo structure containing the UDS path.
+ * @param chunk Pointer to the DataChunk structure containing the CSV chunk
+ * data.
+ * @return 0 on success, -1 on failure.
+ */
+int send_csv_chunk(const UDSInfo *uds_info, const DataChunk *chunk);
+
+/**
+ * Receives processed CSV data over a UDS connection.
+ * @param uds_info Pointer to the UDSInfo structure containing the UDS path.
+ * @param buffer Pointer to a buffer to store the received data.
+ * @param buffer_size Size of the buffer.
+ * @return Number of bytes received, or -1 on failure.
+ */
+int receive_processed_csv(const UDSInfo *uds_info, char *buffer,
+                          size_t buffer_size);
+
+/**
+ * Cleans up the UDS file after communication.
+ * @param uds_info Pointer to the UDSInfo structure containing the UDS path.
+ */
+void cleanup_uds(const UDSInfo *uds_info);
+
 #endif  // DATA_ANALYSIS_H
