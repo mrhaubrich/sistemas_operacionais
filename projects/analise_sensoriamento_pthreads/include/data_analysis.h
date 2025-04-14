@@ -67,8 +67,8 @@ int establish_uds_server(const UDSInfo *uds_info);
 /**
  * Envia um pedaço de CSV por uma conexão UDS.
  * @param uds_info Ponteiro para a estrutura UDSInfo contendo o caminho UDS.
- * @param chunk Ponteiro para a estrutura DataChunk contendo os dados do pedaço
- * CSV.
+ * @param queue Ponteiro para a estrutura ThreadSafeQueue contendo os dados do
+ * pedaço CSV.
  * @return 0 em caso de sucesso, -1 em caso de falha.
  *
  * Implementação: Envie os dados do pedaço CSV para o cliente conectado ao
