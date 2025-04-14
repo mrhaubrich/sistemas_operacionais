@@ -15,28 +15,35 @@ typedef struct {
     int total_indexed_lines;    // Number of lines indexed
 } MappedFile;
 
+typedef struct {
+    const char *header;         // Pointer to the header of the csv
+    const char **line_indices;  // Array of pointers to line starts
+    int data_count;             // Number of lines in the CSV file
+    size_t size;                // Size of mapped data in bytes
+} MappedCSV;
+
 /**
  * Maps a file into memory and builds a line index for fast access
  * @param filepath Path to the file to map
- * @return MappedFile structure containing the mapping and line information
+ * @return MappedCSV structure containing the mapping and line information
  */
-MappedFile map_file(const char *filepath);
+MappedCSV map_csv(const char *filepath);
 
 /**
  * Unmaps a previously mapped file and frees associated resources
- * @param file Pointer to the MappedFile structure
+ * @param file Pointer to the MappedCSV structure
  */
-void unmap_file(MappedFile *file);
+void unmap_csv(MappedCSV *csv);
 
 /**
- * Gets a line from the mapped file by line number (0-based)
- * @param file Mapped file structure
+ * Gets a line from the mapped CSV by line number (0-based)
+ * @param csv Mapped CSV structure
  * @param line_number The 0-based line number to retrieve
  * @param line_length Pointer to store the length of the line (without null
  * terminator)
  * @return Allocated string containing the line (caller must free) or NULL on
  * error
  */
-char *get_line(const MappedFile *file, int line_number, int *line_length);
+char *get_line(const MappedCSV *csv, int line_number, int *line_length);
 
 #endif  // FILE_MAPPING_H

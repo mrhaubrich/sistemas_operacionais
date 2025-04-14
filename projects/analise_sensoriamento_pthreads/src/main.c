@@ -33,19 +33,26 @@ int main(int argc, char *argv[]) {
     printf("Processando arquivo: %s\n\n", filepath);
 
     // Mapear arquivo na memória
-    MappedFile mfile = map_file(filepath);
-    if (mfile.data == NULL) {
+    MappedCSV mappedCsv = map_csv(filepath);
+    if (mappedCsv.header == NULL) {
         fprintf(stderr, "Falha ao mapear o arquivo\n");
         return EXIT_FAILURE;
     }
 
     // Imprimir informações do arquivo
-    print_file_info(&mfile);
+    print_csv_info(&mappedCsv);
 
     // Imprimir uma amostra do conteúdo do arquivo
     printf("\nAmostra do Conteúdo do Arquivo:\n");
     printf("-------------------\n");
-    print_first_n_lines(mfile, 10);
+    for (int i = 0; i < 10 && i < mappedCsv.data_count; i++) {
+        int line_length = 0;
+        char *line = get_line(&mappedCsv, i, &line_length);
+        if (line) {
+            printf("%s\n", line);
+            free(line);
+        }
+    }
 
     // Adicionar funcionalidade adicional de comando: permitir exibir intervalos
     // específicos de linhas
@@ -58,12 +65,12 @@ int main(int argc, char *argv[]) {
         }
 
         printf("\nExibindo Intervalo Personalizado de Linhas:\n");
-        print_lines_range(mfile, start_line - 1,
+        print_lines_range(mappedCsv, start_line - 1,
                           num_lines);  // Converter para base 0
     }
 
     // Limpeza
-    unmap_file(&mfile);
+    unmap_csv(&mappedCsv);
     printf("\nArquivo desmapeado e recursos liberados\n");
 
     return EXIT_SUCCESS;

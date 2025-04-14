@@ -52,20 +52,19 @@ int get_available_number_of_processors(void) {
 
 /**
  * Imprime um intervalo de linhas de um arquivo mapeado
- * @param file O arquivo mapeado
+ * @param csv O arquivo mapeado
  * @param start_line A primeira linha a ser impressa (base 0)
  * @param num_lines Número de linhas a serem impressas
  */
-void print_lines_range(MappedFile file, int start_line, int num_lines) {
-    if (file.data == NULL || file.size == 0) {
+void print_lines_range(MappedCSV csv, int start_line, int num_lines) {
+    if (!csv.header || !csv.line_indices) {
         printf("Sem dados para exibir.\n");
         return;
     }
 
     if (start_line < 0) start_line = 0;
 
-    // Calcula quantas linhas imprimir
-    int total_lines = file.line_count;
+    int total_lines = csv.data_count;
     int end_line = start_line + num_lines;
     if (end_line > total_lines) end_line = total_lines;
 
@@ -79,13 +78,12 @@ void print_lines_range(MappedFile file, int start_line, int num_lines) {
     printf("Exibindo linhas %d a %d (total de linhas: %d)\n", start_line + 1,
            end_line, total_lines);
 
-    // Usa nossa função aprimorada get_line para recuperar linhas
     for (int i = start_line; i < end_line; i++) {
         int line_length = 0;
-        char *line = get_line(&file, i, &line_length);
+        char *line = get_line(&csv, i, &line_length);
 
         if (line) {
-            printf("Linha %d: %s\n", i + 1, line);
+            printf("%s\n", line);
             free(line);
         } else {
             printf("Linha %d: <erro ao recuperar linha>\n", i + 1);
@@ -100,12 +98,12 @@ void print_lines_range(MappedFile file, int start_line, int num_lines) {
 
 /**
  * Imprime as primeiras n linhas de um arquivo mapeado
- * @param file O arquivo mapeado
+ * @param csv O arquivo mapeado
  * @param n Número de linhas a serem impressas (se n <= 0, imprime todas as
  * linhas)
  */
-void print_first_n_lines(MappedFile file, int n) {
-    print_lines_range(file, 0, n <= 0 ? file.line_count : n);
+void print_first_n_lines(MappedCSV csv, int n) {
+    print_lines_range(csv, 0, n <= 0 ? csv.data_count : n);
 }
 
 /**
@@ -129,28 +127,19 @@ void format_size(size_t size, char *buffer, size_t buffer_size) {
 
 /**
  * Imprime informações sobre um arquivo mapeado
- * @param file O arquivo mapeado
+ * @param csv O arquivo mapeado
  */
-void print_file_info(const MappedFile *file) {
-    if (!file || !file->data) {
+void print_csv_info(const MappedCSV *csv) {
+    if (!csv || !csv->header) {
         printf("Arquivo não mapeado ou inválido\n");
         return;
     }
 
     char size_str[32];
-    format_size(file->size, size_str, sizeof(size_str));
+    format_size(csv->data_count, size_str, sizeof(size_str));
 
-    printf("Informações do Arquivo:\n");
-    printf("- Tamanho: %s (%zu bytes)\n", size_str, file->size);
-    printf("- Linhas: %d\n", file->line_count);
-    printf("- Linhas indexadas: %d\n", file->total_indexed_lines);
-    printf("- Contagem de blocos: %zu\n", file->block_count);
-
-    // Para análise de eficiência
-    if (file->line_indices) {
-        printf("- Indexação de linhas: Disponível (acesso rápido)\n");
-    } else {
-        printf(
-            "- Indexação de linhas: Não disponível (varredura sequencial)\n");
-    }
+    printf("Informações do CSV:\n");
+    printf("- Tamanho: %s (%d bytes)\n", size_str, csv->data_count);
+    printf("- Linhas: %d\n", csv->data_count);
+    printf("- Cabeçalho: %s\n", csv->header);
 }

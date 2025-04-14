@@ -31,15 +31,15 @@ int get_available_number_of_processors(void);
  * @param file The mapped file
  * @param n Number of lines to print (if n <= 0, prints all lines)
  */
-void print_first_n_lines(MappedFile file, int n);
+void print_first_n_lines(MappedCSV csv, int n);
 
 /**
- * Prints a range of lines from a mapped file
- * @param file The mapped file
+ * Prints a range of lines from a mapped csv
+ * @param csv The mapped csv
  * @param start_line The first line to print (0-based)
  * @param num_lines Number of lines to print
  */
-void print_lines_range(MappedFile file, int start_line, int num_lines);
+void print_lines_range(MappedCSV csv, int start_line, int num_lines);
 
 /**
  * Creates a formatted string representation of a memory size
@@ -50,9 +50,9 @@ void print_lines_range(MappedFile file, int start_line, int num_lines);
 void format_size(size_t size, char *buffer, size_t buffer_size);
 
 /**
- * Prints information about a mapped file
- * @param file The mapped file
+ * Prints information about a mapped csv
+ * @param csv The mapped csv
  */
-void print_file_info(const MappedFile *file);
+void print_csv_info(const MappedCSV *csv);
 
 #endif  // UTILS_H

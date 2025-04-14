@@ -95,80 +95,47 @@ MappedFile map_file(const char *filepath) {
 
 /**
  * Desmapeia um arquivo previamente mapeado e libera os recursos associados
- * @param file Ponteiro para a estrutura MappedFile
+ * @param ficsvle Ponteiro para a estrutura MappedCSV
  */
-void unmap_file(MappedFile *file) {
-    if (!file || !file->data) {
+void unmap_csv(MappedCSV *csv) {
+    if (!csv || !csv->header || !csv->line_indices) {
         return;
     }
 
     // Libera o array de índice de linhas
-    free(file->line_indices);
-    file->line_indices = NULL;
-    file->total_indexed_lines = 0;
+    free((void *)csv->header);
+    csv->header = NULL;
+    csv->line_indices = NULL;
+    csv->data_count = 0;
 
     // Desmapeia o arquivo
-    munmap(file->data, file->size);
-    file->data = NULL;
-    file->size = 0;
-    file->line_count = 0;
-    file->block_count = 0;
+    munmap((void *)csv->header, csv->size);
+    csv->header = NULL;
+    csv->size = 0;
+    csv->data_count = 0;
 }
 
 /**
- * Obtém uma linha do arquivo mapeado pelo número da linha (baseado em 0)
- * @param file Estrutura do arquivo mapeado
+ * Obtém uma linha do arquivo CSV mapeado pelo número da linha (baseado em 0)
+ * @param csv Estrutura do arquivo CSV mapeado
  * @param line_number O número da linha baseado em 0 para recuperar
  * @param line_length Ponteiro para armazenar o comprimento da linha (sem
  * terminador nulo)
  * @return String alocada contendo a linha (o chamador deve liberar) ou NULL em
  * caso de erro
  */
-char *get_line(const MappedFile *file, int line_number, int *line_length) {
-    if (!file || !file->data || line_number < 0 ||
-        line_number >= file->line_count) {
+char *get_line(const MappedCSV *csv, int line_number, int *line_length) {
+    if (!csv || !csv->line_indices || line_number < 0 ||
+        line_number >= csv->data_count) {
         if (line_length) *line_length = 0;
         return NULL;
     }
 
-    const char *line_start = NULL;
-    const char *line_end = NULL;
+    const char *line_start = csv->line_indices[line_number];
+    const char *line_end =
+        memchr(line_start, '\n', csv->header + csv->data_count - line_start);
+    if (!line_end) line_end = csv->header + csv->data_count;
 
-    // Caminho rápido: usa o índice de linhas, se disponível
-    if (file->line_indices && line_number < file->total_indexed_lines) {
-        line_start = file->line_indices[line_number];
-
-        // Encontra o final desta linha (próxima nova linha ou fim do arquivo)
-        line_end =
-            memchr(line_start, '\n', file->data + file->size - line_start);
-        if (!line_end) line_end = file->data + file->size;
-    } else {
-        // Caminho lento: escaneia o arquivo
-        const char *p = file->data;
-        const char *end = file->data + file->size;
-        int current_line = 0;
-
-        while (p < end && current_line < line_number) {
-            const char *nl = memchr(p, '\n', end - p);
-            if (nl) {
-                current_line++;
-                p = nl + 1;
-            } else {
-                break;
-            }
-        }
-
-        if (current_line != line_number) {
-            if (line_length) *line_length = 0;
-            return NULL;
-        }
-
-        line_start = p;
-        line_end = memchr(p, '\n', end - p);
-        if (!line_end) line_end = end;
-    }
-
-    // Calcula o comprimento da linha e aloca memória
     int len = line_end - line_start;
     char *result = malloc(len + 1);
 
@@ -177,10 +144,50 @@ char *get_line(const MappedFile *file, int line_number, int *line_length) {
         return NULL;
     }
 
-    // Copia o conteúdo da linha
     memcpy(result, line_start, len);
     result[len] = '\0';
 
     if (line_length) *line_length = len;
+    return result;
+}
+
+/**
+ * Mapeia um arquivo CSV na memória e retorna uma estrutura MappedCSV
+ * @param filepath Caminho para o arquivo CSV a ser mapeado
+ * @return Estrutura MappedCSV contendo o mapeamento e informações de linha
+ */
+MappedCSV map_csv(const char *filepath) {
+    MappedFile temp_result = map_file(filepath);
+    MappedCSV result = {NULL, NULL, 0, 0};
+
+    if (temp_result.data == NULL) {
+        return result;
+    }
+
+    // Set header to point to the start of the file
+    result.header = temp_result.data;
+
+    // Find the first newline character to separate header from data
+    const char *first_newline =
+        memchr(temp_result.data, '\n', temp_result.size);
+    if (first_newline) {
+        // Calculate the header length (excluding newline)
+        size_t header_len = first_newline - temp_result.data;
+
+        // Create a null-terminated copy of the header
+        char *header_copy = malloc(header_len + 1);
+        if (header_copy) {
+            memcpy(header_copy, temp_result.data, header_len);
+            header_copy[header_len] = '\0';
+            result.header = header_copy;
+        }
+    }
+
+    // Adjust line_indices to exclude the header
+    result.line_indices = temp_result.line_indices + 1;  // Skip the header line
+    result.data_count =
+        temp_result.line_count - 1;  // Exclude header from data count
+    result.size = temp_result.size;
+
     return result;
 }
