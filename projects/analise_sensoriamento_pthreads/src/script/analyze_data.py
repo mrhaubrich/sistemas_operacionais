@@ -2,7 +2,7 @@ import argparse
 import io
 import socket
 
-import pandas as pd
+import polars as pl
 
 # csv:
 # id|device|contagem|data|temperatura|umidade|luminosidade|ruido|eco2|etvoc|latitude|longitude
@@ -27,52 +27,71 @@ def read_csv_from_file(file_path):
         return io.StringIO(file.read())
 
 
-def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     # Remove todos dados que não tem a coluna "device"
     if "device" not in df.columns:
         raise ValueError("O DataFrame não contém a coluna 'device'.")
-    df = df[df["device"].notna()].copy()
+    df = df.filter(df["device"].is_not_null())
 
-    df.drop(columns=["latitude", "longitude"], inplace=True)
-    df.dropna(inplace=True)
+    df = df.drop(["latitude", "longitude"])
+    df = df.drop_nulls()
 
-    if df.empty:
+    if df.is_empty():
         raise ValueError("O DataFrame está vazio após a normalização.")
 
     return df
 
 
 def analyze_csv_data(csv_data):
-    # Analisa os dados do CSV usando pandas
-    df = pd.read_csv(csv_data, sep="|")
+    # Analisa os dados do CSV usando polars
+    df = pl.read_csv(csv_data, separator="|")
     df = normalize_dataframe(df)
 
     # Converte a coluna 'data' para datetime e cria a coluna 'ano-mes'
-    df["data"] = pd.to_datetime(df["data"], format="mixed")
-    df["ano-mes"] = df["data"].dt.to_period("M").astype(str)
+    df = df.with_columns(
+        df["data"]
+        .str.split(" ")
+        .list.get(0)
+        .str.strptime(pl.Datetime, format="%Y-%m-%d")
+        .alias("data")
+    )
+    df = df.with_columns(df["data"].dt.strftime("%Y-%m").alias("ano-mes"))
 
     # Lista de sensores para análise
     sensors = ["temperatura", "umidade", "luminosidade", "ruido", "eco2", "etvoc"]
+
+    # Converta os sensores para valores numéricos
+    for sensor in sensors:
+        if sensor in df.columns:
+            df = df.with_columns(pl.col(sensor).cast(pl.Float64))
 
     # Calcula os valores mínimos, máximos e médios por dispositivo, ano-mês e sensor
     results = []
     for sensor in sensors:
         if sensor in df.columns:
             grouped = (
-                df.groupby(["device", "ano-mes"])[sensor]
-                .agg(valor_maximo="max", valor_medio="mean", valor_minimo="min")
-                .reset_index()
+                df.group_by(["device", "ano-mes"])
+                .agg(
+                    [
+                        pl.max(sensor).alias("valor_maximo"),
+                        pl.mean(sensor).alias("valor_medio"),
+                        pl.min(sensor).alias("valor_minimo"),
+                    ]
+                )
+                .with_columns(pl.lit(sensor).alias("sensor"))
             )
-            grouped["sensor"] = sensor
             results.append(grouped)
 
     # Combina os resultados de todos os sensores
-    final_result = pd.concat(results, ignore_index=True)
+    final_result = pl.concat(results)
+
+    # Ordena os resultados
+    final_result = final_result.sort(["device", "ano-mes", "sensor"])
 
     # Reorganiza as colunas no formato solicitado
-    final_result = final_result[
+    final_result = final_result.select(
         ["device", "ano-mes", "sensor", "valor_maximo", "valor_medio", "valor_minimo"]
-    ]
+    )
 
     return final_result
 
@@ -81,7 +100,7 @@ def process_csv_data(uds_path):
     # Lê os dados do socket e processa
     csv_data = read_csv_from_socket(uds_path)
     result = analyze_csv_data(csv_data)
-    result_csv = result.to_csv(index=False)
+    result_csv = result.write_csv()
 
     # Envia o CSV processado de volta para o servidor
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
@@ -106,4 +125,6 @@ if __name__ == "__main__":
     elif args.csv_location:
         csv_data = read_csv_from_file(args.csv_location)
         result = analyze_csv_data(csv_data)
-        print(result.to_csv(index=False))
+        print(result)
+        # print(result.write_csv())
+        print(len(result))
