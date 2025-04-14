@@ -57,27 +57,27 @@ pid_t launch_python_process(const UDSInfo *uds_info, const char *script_path);
 int establish_uds_server(const UDSInfo *uds_info);
 
 /**
- * Sends a CSV chunk over a UDS connection.
- * @param uds_info Pointer to the UDSInfo structure containing the UDS path.
- * @param chunk Pointer to the DataChunk structure containing the CSV chunk
- * data.
- * @return 0 on success, -1 on failure.
+ * Envia um pedaço de CSV por uma conexão UDS.
+ * @param uds_info Ponteiro para a estrutura UDSInfo contendo o caminho UDS.
+ * @param chunk Ponteiro para a estrutura DataChunk contendo os dados do pedaço
+ * CSV.
+ * @return 0 em caso de sucesso, -1 em caso de falha.
  */
 int send_csv_chunk(const UDSInfo *uds_info, const DataChunk *chunk);
 
 /**
- * Receives processed CSV data over a UDS connection.
- * @param uds_info Pointer to the UDSInfo structure containing the UDS path.
- * @param buffer Pointer to a buffer to store the received data.
- * @param buffer_size Size of the buffer.
- * @return Number of bytes received, or -1 on failure.
+ * Recebe dados processados do CSV por uma conexão UDS.
+ * @param uds_info Ponteiro para a estrutura UDSInfo contendo o caminho UDS.
+ * @param buffer Ponteiro para um buffer para armazenar os dados recebidos.
+ * @param buffer_size Tamanho do buffer.
+ * @return Número de bytes recebidos, ou -1 em caso de falha.
  */
 int receive_processed_csv(const UDSInfo *uds_info, char *buffer,
                           size_t buffer_size);
 
 /**
- * Cleans up the UDS file after communication.
- * @param uds_info Pointer to the UDSInfo structure containing the UDS path.
+ * Limpa o arquivo UDS após a comunicação.
+ * @param uds_info Ponteiro para a estrutura UDSInfo contendo o caminho UDS.
  */
 void cleanup_uds(const UDSInfo *uds_info);
 

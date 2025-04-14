@@ -4,11 +4,11 @@ import io
 import sys
 
 def process_csv_data(uds_path):
-    # Connect to the UDS server
+    # Conecta ao servidor UDS
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
         client_socket.connect(uds_path)
 
-        # Receive the CSV data
+        # Recebe os dados do CSV
         data = b""
         while True:
             chunk = client_socket.recv(4096)
@@ -16,17 +16,17 @@ def process_csv_data(uds_path):
                 break
             data += chunk
 
-        # Wrap the data in a StringIO object and parse it with pandas
+        # Envolve os dados em um objeto StringIO e os analisa com pandas
         csv_data = io.StringIO(data.decode('utf-8'))
         df = pd.read_csv(csv_data)
 
-        # Perform data analysis (example: calculate min, max, and mean)
+        # Realiza a análise de dados (exemplo: calcula mínimo, máximo e média)
         result = df.groupby('name').agg({'value': ['min', 'max', 'mean']})
 
-        # Convert the result back to CSV
+        # Converte o resultado de volta para o formato CSV
         result_csv = result.to_csv()
 
-        # Send the processed CSV back to the server
+        # Envia o CSV processado de volta para o servidor
         client_socket.sendall(result_csv.encode('utf-8'))
 
 if __name__ == "__main__":
