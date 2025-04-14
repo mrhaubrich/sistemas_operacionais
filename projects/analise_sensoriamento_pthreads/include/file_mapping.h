@@ -4,45 +4,48 @@
 #include <stddef.h>
 
 /**
- * Structure representing a memory-mapped file with line indexing information
+ * Estrutura representando um arquivo mapeado na memória com informações de
+ * indexação de linhas
  */
 typedef struct {
-    char *data;                 // Pointer to mapped data
-    size_t size;                // Size of mapped data in bytes
-    size_t block_count;         // Number of blocks in file
-    int line_count;             // Total number of lines in file
-    const char **line_indices;  // Array of pointers to each line start
-    int total_indexed_lines;    // Number of lines indexed
+    char *data;          // Ponteiro para os dados mapeados
+    size_t size;         // Tamanho dos dados mapeados em bytes
+    size_t block_count;  // Número de blocos no arquivo
+    int line_count;      // Número total de linhas no arquivo
+    const char *
+        *line_indices;        // Array de ponteiros para o início de cada linha
+    int total_indexed_lines;  // Número de linhas indexadas
 } MappedFile;
 
 typedef struct {
-    const char *header;         // Pointer to the header of the csv
-    const char **line_indices;  // Array of pointers to line starts
-    int data_count;             // Number of lines in the CSV file
-    size_t size;                // Size of mapped data in bytes
+    const char *header;         // Ponteiro para o cabeçalho do csv
+    const char **line_indices;  // Array de ponteiros para o início das linhas
+    int data_count;             // Número de linhas no arquivo CSV
+    size_t size;                // Tamanho dos dados mapeados em bytes
 } MappedCSV;
 
 /**
- * Maps a file into memory and builds a line index for fast access
- * @param filepath Path to the file to map
- * @return MappedCSV structure containing the mapping and line information
+ * Mapeia um arquivo na memória e constrói um índice de linhas para acesso
+ * rápido
+ * @param filepath Caminho para o arquivo a ser mapeado
+ * @return Estrutura MappedCSV contendo o mapeamento e informações de linha
  */
 MappedCSV map_csv(const char *filepath);
 
 /**
- * Unmaps a previously mapped file and frees associated resources
- * @param file Pointer to the MappedCSV structure
+ * Desmapeia um arquivo previamente mapeado e libera os recursos associados
+ * @param file Ponteiro para a estrutura MappedCSV
  */
 void unmap_csv(MappedCSV *csv);
 
 /**
- * Gets a line from the mapped CSV by line number (0-based)
- * @param csv Mapped CSV structure
- * @param line_number The 0-based line number to retrieve
- * @param line_length Pointer to store the length of the line (without null
- * terminator)
- * @return Allocated string containing the line (caller must free) or NULL on
- * error
+ * Obtém uma linha do arquivo CSV mapeado pelo número da linha (baseado em 0)
+ * @param csv Estrutura do arquivo CSV mapeado
+ * @param line_number O número da linha baseado em 0 para recuperar
+ * @param line_length Ponteiro para armazenar o comprimento da linha (sem
+ * terminador nulo)
+ * @return String alocada contendo a linha (o chamador deve liberar) ou NULL em
+ * caso de erro
  */
 char *get_line(const MappedCSV *csv, int line_number, int *line_length);
 

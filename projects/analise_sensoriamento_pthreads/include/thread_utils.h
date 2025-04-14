@@ -5,111 +5,116 @@
 #include <stddef.h>
 
 /**
- * Structure containing data for a single thread's work on a file segment
+ * Estrutura contendo dados para o trabalho de uma única thread em um segmento
+ * de arquivo
  */
 typedef struct {
-    const char *start;  // Pointer to start of this thread's data segment
-    size_t size;        // Size of this thread's data segment
-    int line_count;     // Number of lines counted by this thread
-    const char **line_indices;  // Array of pointers to line starts
-    int index_capacity;         // Allocated capacity for line_indices
-    int index_count;            // Number of entries in line_indices
+    const char
+        *start;      // Ponteiro para o início do segmento de dados desta thread
+    size_t size;     // Tamanho do segmento de dados desta thread
+    int line_count;  // Número de linhas contadas por esta thread
+    const char **line_indices;  // Array de ponteiros para inícios de linhas
+    int index_capacity;         // Capacidade alocada para line_indices
+    int index_count;            // Número de entradas em line_indices
 } ThreadData;
 
 /**
- * Structure containing resources for thread-based parallel processing
+ * Estrutura contendo recursos para processamento paralelo baseado em threads
  */
 typedef struct {
-    pthread_t *threads;              // Array of thread handles
-    ThreadData *thread_data;         // Array of thread data structures
-    int num_threads;                 // Number of threads
-    const char **global_line_index;  // Global array of all line pointers
-    int total_lines;                 // Total number of indexed lines
+    pthread_t *threads;       // Array de identificadores de threads
+    ThreadData *thread_data;  // Array de estruturas de dados de thread
+    int num_threads;          // Número de threads
+    const char *
+        *global_line_index;  // Array global de todos os ponteiros de linha
+    int total_lines;         // Número total de linhas indexadas
 } ThreadResources;
 
 /**
- * Allocates memory for thread resources
- * @param num_threads Number of threads to allocate
- * @return Pointer to allocated ThreadResources or NULL on failure
+ * Aloca memória para recursos de threads
+ * @param num_threads Número de threads a serem alocadas
+ * @return Ponteiro para ThreadResources alocado ou NULL em caso de falha
  */
 ThreadResources *allocate_thread_resources(int num_threads);
 
 /**
- * Frees all memory allocated for thread resources
- * @param resources Pointer to ThreadResources to free
+ * Libera toda a memória alocada para recursos de threads
+ * @param resources Ponteiro para ThreadResources a ser liberado
  */
 void free_thread_resources(ThreadResources *resources);
 
 /**
- * Calculates the block size for a specific thread
- * @param thread_index Thread index (0-based)
- * @param num_threads Total number of threads
- * @param total_size Total size of data to process
- * @return Size in bytes for the thread's block
+ * Calcula o tamanho do bloco para uma thread específica
+ * @param thread_index Índice da thread (base 0)
+ * @param num_threads Número total de threads
+ * @param total_size Tamanho total dos dados a serem processados
+ * @return Tamanho em bytes do bloco da thread
  */
 size_t calculate_block_size(int thread_index, int num_threads,
                             size_t total_size);
 
 /**
- * Initializes thread data for a specific thread
- * @param thread_data Array of thread data structures
- * @param index Index of the thread to initialize
- * @param data Pointer to the start of file data
- * @param block_size Size of the thread's block
- * @param block_offset Offset from start of data to the thread's block
+ * Inicializa dados de thread para uma thread específica
+ * @param thread_data Array de estruturas de dados de thread
+ * @param index Índice da thread a ser inicializada
+ * @param data Ponteiro para o início dos dados do arquivo
+ * @param block_size Tamanho do bloco da thread
+ * @param block_offset Offset do início dos dados para o bloco da thread
  */
 void initialize_thread_data(ThreadData *thread_data, int index,
                             const char *data, size_t block_size,
                             size_t block_offset);
 
 /**
- * Adjusts block boundaries to ensure they align with line breaks
- * @param thread_data Array of thread data structures
- * @param i Current thread index to adjust
- * @param data Pointer to the start of file data
+ * Ajusta os limites do bloco para garantir que estejam alinhados com quebras de
+ * linha
+ * @param thread_data Array de estruturas de dados de thread
+ * @param i Índice atual da thread a ser ajustado
+ * @param data Ponteiro para o início dos dados do arquivo
  */
 void adjust_block_boundaries(ThreadData *thread_data, int i, const char *data);
 
 /**
- * Identifies duplicate lines that may occur at thread boundaries
- * @param thread_data Array of thread data structures
- * @param num_threads Total number of threads
- * @param data Pointer to the start of file data
- * @param size Total size of data
- * @return Number of duplicate lines found
+ * Identifica linhas duplicadas que podem ocorrer nos limites das threads
+ * @param thread_data Array de estruturas de dados de thread
+ * @param num_threads Número total de threads
+ * @param data Ponteiro para o início dos dados do arquivo
+ * @param size Tamanho total dos dados
+ * @return Número de linhas duplicadas encontradas
  */
 int correct_duplicate_lines(ThreadData *thread_data, int num_threads,
                             const char *data, size_t size);
 
 /**
- * Starts threads to process file blocks in parallel
- * @param resources Thread resources structure
- * @param data Pointer to the start of file data
- * @param size Total size of data
- * @return 0 on success, -1 on failure
+ * Inicia threads para processar blocos de arquivo em paralelo
+ * @param resources Estrutura de recursos de threads
+ * @param data Ponteiro para o início dos dados do arquivo
+ * @param size Tamanho total dos dados
+ * @return 0 em caso de sucesso, -1 em caso de falha
  */
 int start_threads(ThreadResources *resources, const char *data, size_t size);
 
 /**
- * Waits for all threads to finish and collects their results
- * @param resources Thread resources structure
- * @return Total line count from all threads
+ * Aguarda todas as threads terminarem e coleta seus resultados
+ * @param resources Estrutura de recursos de threads
+ * @return Contagem total de linhas de todas as threads
  */
 int join_threads_and_collect_results(ThreadResources *resources);
 
 /**
- * Merges thread-local line indices into a global index
- * @param resources Thread resources structure
- * @return Pointer to global line index array or NULL on failure
+ * Mescla índices de linha locais das threads em um índice global
+ * @param resources Estrutura de recursos de threads
+ * @return Ponteiro para o array de índice de linha global ou NULL em caso de
+ * falha
  */
 const char **merge_line_indices(ThreadResources *resources);
 
 /**
- * Removes duplicate line indices from the global index
- * @param line_indices Line indices array
- * @param total_lines Total number of lines in the array
- * @param num_duplicates Expected number of duplicates to remove
- * @return Number of entries actually removed
+ * Remove índices de linha duplicados do índice global
+ * @param line_indices Array de índices de linha
+ * @param total_lines Número total de linhas no array
+ * @param num_duplicates Número esperado de duplicatas a serem removidas
+ * @return Número de entradas realmente removidas
  */
 int remove_duplicate_line_indices(const char **line_indices, int total_lines,
                                   int num_duplicates);

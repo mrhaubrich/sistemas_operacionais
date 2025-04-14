@@ -164,17 +164,18 @@ MappedCSV map_csv(const char *filepath) {
         return result;
     }
 
-    // Set header to point to the start of the file
+    // Define o cabeçalho para apontar para o início do arquivo
     result.header = temp_result.data;
 
-    // Find the first newline character to separate header from data
+    // Encontra o primeiro caractere de nova linha para separar o cabeçalho dos
+    // dados
     const char *first_newline =
         memchr(temp_result.data, '\n', temp_result.size);
     if (first_newline) {
-        // Calculate the header length (excluding newline)
+        // Calcula o comprimento do cabeçalho (excluindo nova linha)
         size_t header_len = first_newline - temp_result.data;
 
-        // Create a null-terminated copy of the header
+        // Cria uma cópia do cabeçalho com terminador nulo
         char *header_copy = malloc(header_len + 1);
         if (header_copy) {
             memcpy(header_copy, temp_result.data, header_len);
@@ -183,10 +184,11 @@ MappedCSV map_csv(const char *filepath) {
         }
     }
 
-    // Adjust line_indices to exclude the header
-    result.line_indices = temp_result.line_indices + 1;  // Skip the header line
+    // Ajusta line_indices para excluir o cabeçalho
+    result.line_indices =
+        temp_result.line_indices + 1;  // Pula a linha do cabeçalho
     result.data_count =
-        temp_result.line_count - 1;  // Exclude header from data count
+        temp_result.line_count - 1;  // Exclui o cabeçalho da contagem de dados
     result.size = temp_result.size;
 
     return result;
