@@ -8,12 +8,7 @@
 #include <unistd.h>      // Para fork e exec
 
 #include "file_mapping.h"  // Inclusão para MappedCSV
-
-// Estrutura para representar um pedaço de dados
-typedef struct {
-    char *data;   // Ponteiro para os dados do pedaço
-    size_t size;  // Tamanho do pedaço
-} DataChunk;
+#include "thread_safe_queue.h"
 
 // Estrutura para representar informações do UDS
 typedef struct {
@@ -35,8 +30,8 @@ typedef struct {
  * especificado (chunk_size). Cada pedaço deve ser armazenado na estrutura
  * DataChunk fornecida no array chunks.
  */
-int partition_csv(const MappedCSV *csv, size_t chunk_size, DataChunk *chunks,
-                  size_t max_chunks);
+int partition_csv(const MappedCSV *csv, size_t chunk_size,
+                  ThreadSafeQueue *queue, size_t max_chunks);
 
 /**
  * Gera um caminho UDS único para um dado ID de fatia.
@@ -80,7 +75,7 @@ int establish_uds_server(const UDSInfo *uds_info);
  * socket UDS. Certifique-se de que todos os dados sejam transmitidos
  * corretamente.
  */
-int send_csv_chunk(const UDSInfo *uds_info, const DataChunk *chunk);
+int send_csv_chunk(const UDSInfo *uds_info, const ThreadSafeQueue *queue);
 
 /**
  * Recebe dados processados do CSV por uma conexão UDS.
