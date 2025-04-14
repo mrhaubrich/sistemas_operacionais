@@ -22,7 +22,7 @@ typedef struct {
  * Particiona o arquivo CSV em pedaços menores.
  * @param csv Estrutura MappedCSV representando o arquivo CSV mapeado.
  * @param chunk_size Número de linhas ou bytes por pedaço.
- * @param chunks Array para armazenar os pedaços resultantes.
+ * @param queue Fila de espera para armazenar os pedaços.
  * @param max_chunks Número máximo de pedaços a serem gerados.
  * @return Número de pedaços criados.
  *
