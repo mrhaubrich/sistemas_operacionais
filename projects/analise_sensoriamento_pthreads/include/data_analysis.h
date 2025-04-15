@@ -23,7 +23,6 @@ typedef struct {
  * @param csv Estrutura MappedCSV representando o arquivo CSV mapeado.
  * @param chunk_size Número de linhas ou bytes por pedaço.
  * @param queue Fila de espera para armazenar os pedaços.
- * @param max_chunks Número máximo de pedaços a serem gerados.
  * @return Número de pedaços criados.
  *
  * Implementação: Divida o arquivo CSV em pedaços menores com base no tamanho
@@ -31,7 +30,7 @@ typedef struct {
  * DataChunk fornecida no array chunks.
  */
 int partition_csv(const MappedCSV *csv, size_t chunk_size,
-                  ThreadSafeQueue *queue, size_t max_chunks);
+                  ThreadSafeQueue *queue);
 
 /**
  * Gera um caminho UDS único para um dado ID de fatia.

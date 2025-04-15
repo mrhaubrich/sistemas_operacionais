@@ -67,6 +67,8 @@ void *worker_func(void *arg) {
     if (pid > 0) waitpid(pid, NULL, 0);
     cleanup_uds(&uds_info);
 
+    printf("Thread %d completed processing.\n", id);
+
     pthread_exit(NULL);
 }
 
@@ -109,7 +111,7 @@ int main(int argc, char *argv[]) {
     // --- NOVA LÓGICA USANDO PTHREADS PARA PROCESSAMENTO PARALELO COM PYTHON
     // ---
 
-    int n_cpus = num_processors;
+    size_t n_cpus = num_processors;
     ThreadSafeQueue *queue = thread_safe_queue_create();
     if (!queue) {
         fprintf(stderr, "Falha ao criar fila de chunks\n");
@@ -123,7 +125,7 @@ int main(int argc, char *argv[]) {
 
     printf("Tamanho do chunk: %d\n", chunk_size);
 
-    size_t num_chunks = partition_csv(&mappedCsv, chunk_size, queue, n_cpus);
+    size_t num_chunks = partition_csv(&mappedCsv, chunk_size, queue);
     printf("Número de chunks particionados: %zu\n", num_chunks);
 
     if (num_chunks == 0) {
@@ -154,7 +156,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    for (size_t i = 0; i < num_chunks; ++i) {
+    for (size_t i = 0; i < n_cpus; ++i) {
         args[i].thread_id = (int)i;
         args[i].queue = queue;
         args[i].script_path = script_path;
@@ -165,7 +167,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Aguarda todas as threads terminarem
-    for (size_t i = 0; i < num_chunks; ++i) {
+    for (size_t i = 0; i < n_cpus; ++i) {
         pthread_join(threads[i], NULL);
     }
 

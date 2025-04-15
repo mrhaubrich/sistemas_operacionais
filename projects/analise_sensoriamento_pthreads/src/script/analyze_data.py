@@ -1,7 +1,6 @@
 import argparse
 import io
 import socket
-from datetime import datetime
 
 import polars as pl
 
@@ -14,31 +13,28 @@ def read_csv_from_socket(uds_path):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
         client_socket.connect(uds_path)
         data = b""
-        now = datetime.now()
         while True:
-            chunk = client_socket.recv(40960)
+            chunk = client_socket.recv(4096)
             if not chunk:
                 break
             data += chunk
-        then = datetime.now()
-        print(f"Tempo de leitura do socket: {then - now}")
-    return io.StringIO(data.decode("utf-8"))
+    return io.StringIO(data.decode("us-ascii"))
 
 
 def read_csv_from_file(file_path):
     # Lê os dados do CSV de um arquivo
-    with open(file_path, "r") as file:
+    with open(file_path, "r", encoding="us-ascii") as file:
         return io.StringIO(file.read())
 
 
 def normalize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     # Remove todos dados que não tem a coluna "device"
+    # drop id column
+    df = df.drop(["id", "latitude", "longitude"])
+    df = df.drop_nulls()
     if "device" not in df.columns:
         raise ValueError("O DataFrame não contém a coluna 'device'.")
     df = df.filter(df["device"].is_not_null())
-
-    df = df.drop(["latitude", "longitude"])
-    df = df.drop_nulls()
 
     if df.is_empty():
         raise ValueError("O DataFrame está vazio após a normalização.")
@@ -48,7 +44,7 @@ def normalize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
 
 def analyze_csv_data(csv_data):
     # Analisa os dados do CSV usando polars
-    df = pl.read_csv(csv_data, separator="|")
+    df = pl.read_csv(csv_data, separator="|", infer_schema_length=10000)
     df = normalize_dataframe(df)
 
     # Converte a coluna 'data' para datetime e cria a coluna 'ano-mes'

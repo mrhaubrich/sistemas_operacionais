@@ -1,27 +1,28 @@
 #include "../include/data_analysis.h"
 
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+extern char **environ;
 
 // Particiona o arquivo CSV em pedaços menores e enfileira-os na fila.
 int partition_csv(const MappedCSV *csv, size_t chunk_size,
-                  ThreadSafeQueue *queue, size_t max_chunks) {
+                  ThreadSafeQueue *queue) {
     if (!csv || !queue || chunk_size == 0) return 0;
 
     size_t chunk_count = 0;
     size_t line = 0;
     size_t header_len = strlen(csv->header);
 
-    while (line < (size_t)csv->data_count && chunk_count < max_chunks) {
+    while (line < (size_t)csv->data_count) {
         size_t start = line;
         size_t end = (line + chunk_size < (size_t)csv->data_count)
                          ? (line + chunk_size)
                          : (size_t)csv->data_count;
-        // Calcula o tamanho do chunk de dados (sem header)
         const char *start_ptr = csv->line_indices[start];
         const char *end_ptr =
             (end < (size_t)csv->data_count)
@@ -30,18 +31,9 @@ int partition_csv(const MappedCSV *csv, size_t chunk_size,
                    strlen(csv->line_indices[csv->data_count - 1]));
         size_t data_len = end_ptr - start_ptr;
 
-        // Aloca espaço para header + '\n' + dados + '\0'
-        size_t slice_len = header_len + 1 + data_len;
-        char *slice = malloc(slice_len + 1);
-        if (!slice) break;
-
-        // Copia header, '\n', depois os dados do chunk
-        memcpy(slice, csv->header, header_len);
-        slice[header_len] = '\n';
-        memcpy(slice + header_len + 1, start_ptr, data_len);
-        slice[slice_len] = '\0';
-
-        thread_safe_queue_enqueue(queue, slice);
+        // Enfileira o ponteiro, tamanho do chunk, header e tamanho do header
+        thread_safe_queue_enqueue(queue, start_ptr, data_len, csv->header,
+                                  header_len);
         chunk_count++;
         line = end;
     }
@@ -59,12 +51,13 @@ void generate_uds_path(int slice_id, UDSInfo *uds_info) {
 // Lança um processo Python para processar um pedaço de dados.
 pid_t launch_python_process(const UDSInfo *uds_info, const char *script_path) {
     if (!uds_info || !script_path) return -1;
-    pid_t pid = fork();
-    if (pid == 0) {
-        execlp("python3", "python3", script_path, "--uds-location",
-               uds_info->uds_path, (char *)NULL);
-        perror("exec python3 failed");
-        _exit(1);
+    pid_t pid;
+    char *argv[] = {"python3", (char *)script_path, "--uds-location",
+                    (char *)uds_info->uds_path, NULL};
+    int status = posix_spawnp(&pid, "python3", NULL, NULL, argv, environ);
+    if (status != 0) {
+        fprintf(stderr, "posix_spawnp failed: %s\n", strerror(status));
+        return -1;
     }
     return pid;
 }
@@ -101,15 +94,30 @@ int send_csv_chunk(const UDSInfo *uds_info, const ThreadSafeQueue *queue) {
 
     size_t count = thread_safe_queue_get_count((ThreadSafeQueue *)queue);
     for (size_t i = 0; i < count; ++i) {
-        const char *slice = thread_safe_queue_dequeue((ThreadSafeQueue *)queue);
-        if (!slice) continue;
-        size_t len = strlen(slice);
-        ssize_t sent = send(client_fd, slice, len, 0);
+        const char *slice;
+        size_t slice_len;
+        const char *header;
+        size_t header_len;
+        if (thread_safe_queue_dequeue((ThreadSafeQueue *)queue, &slice,
+                                      &slice_len, &header, &header_len) != 0)
+            continue;
+
+        // Envia header + '\n' + dados do chunk
+        ssize_t sent = send(client_fd, header, header_len, 0);
         if (sent < 0) {
             close(client_fd);
             return -1;
         }
-        free((void *)slice);
+        sent = send(client_fd, "\n", 1, 0);
+        if (sent < 0) {
+            close(client_fd);
+            return -1;
+        }
+        sent = send(client_fd, slice, slice_len, 0);
+        if (sent < 0) {
+            close(client_fd);
+            return -1;
+        }
     }
     close(client_fd);
     return 0;
