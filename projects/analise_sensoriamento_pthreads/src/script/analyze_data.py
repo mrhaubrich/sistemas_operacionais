@@ -1,6 +1,7 @@
 import argparse
 import io
 import socket
+from datetime import datetime
 
 import polars as pl
 
@@ -13,11 +14,14 @@ def read_csv_from_socket(uds_path):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
         client_socket.connect(uds_path)
         data = b""
+        now = datetime.now()
         while True:
-            chunk = client_socket.recv(4096)
+            chunk = client_socket.recv(40960)
             if not chunk:
                 break
             data += chunk
+        then = datetime.now()
+        print(f"Tempo de leitura do socket: {then - now}")
     return io.StringIO(data.decode("utf-8"))
 
 
