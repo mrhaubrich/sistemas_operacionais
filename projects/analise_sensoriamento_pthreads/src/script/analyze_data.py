@@ -1,23 +1,31 @@
 import argparse
 import io
 import socket
+from datetime import datetime
 
 import polars as pl
+
+BUFFER_SIZE = 65536  # 64 KiB is a good default for socket reads
 
 # csv:
 # id|device|contagem|data|temperatura|umidade|luminosidade|ruido|eco2|etvoc|latitude|longitude
 
 
 def read_csv_from_socket(uds_path):
+    now = datetime.now()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
         client_socket.connect(uds_path)
-        data = b""
+        buffer = io.StringIO()
         while True:
-            chunk = client_socket.recv(40960)
+            chunk = client_socket.recv(BUFFER_SIZE)
             if not chunk:
                 break
-            data += chunk
-    return io.StringIO(data.decode("utf-8"))
+            buffer.write(chunk.decode("utf-8"))
+    then = datetime.now()
+    # print in seconds
+    # print(f"Tempo de leitura do socket: {(then - now).total_seconds()} segundos")
+    buffer.seek(0)
+    return buffer
 
 
 def read_csv_from_file(file_path):
@@ -28,68 +36,76 @@ def read_csv_from_file(file_path):
 
 def normalize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     # Remove todos dados que não tem a coluna "device"
-    # drop id column
-    df = df.drop(["id", "latitude", "longitude"])
+    # Drop unnecessary columns in one go
+    drop_cols = [col for col in ["id", "latitude", "longitude"] if col in df.columns]
+    df = df.drop(drop_cols)
     df = df.drop_nulls()
     if "device" not in df.columns:
         raise ValueError("O DataFrame não contém a coluna 'device'.")
     df = df.filter(df["device"].is_not_null())
-
     if df.is_empty():
         raise ValueError("O DataFrame está vazio após a normalização.")
-
     return df
 
 
 def analyze_csv_data(csv_data):
     # Analisa os dados do CSV usando polars
-    df = pl.read_csv(csv_data, separator="|", infer_schema_length=10000)
+    df = pl.read_csv(csv_data, separator="|")
     df = normalize_dataframe(df)
 
     # Converte a coluna 'data' para datetime e cria a coluna 'ano-mes'
     df = df.with_columns(
-        df["data"]
-        .str.split(" ")
-        .list.get(0)
-        .str.strptime(pl.Datetime, format="%Y-%m-%d")
-        .alias("data")
+        [
+            df["data"]
+            .str.split(" ")
+            .list.get(0)
+            .str.strptime(pl.Datetime, format="%Y-%m-%d")
+            .alias("data"),
+        ]
     )
-    df = df.with_columns(df["data"].dt.strftime("%Y-%m").alias("ano-mes"))
+    df = df.with_columns(
+        [
+            df["data"].dt.strftime("%Y-%m").alias("ano-mes"),
+        ]
+    )
 
     # Lista de sensores para análise
-    sensors = ["temperatura", "umidade", "luminosidade", "ruido", "eco2", "etvoc"]
+    sensors = [
+        col
+        for col in ["temperatura", "umidade", "luminosidade", "ruido", "eco2", "etvoc"]
+        if col in df.columns
+    ]
 
-    # Converta os sensores para valores numéricos
-    for sensor in sensors:
-        if sensor in df.columns:
-            df = df.with_columns(pl.col(sensor).cast(pl.Float64))
+    # Converta os sensores para valores numéricos em lote
+    df = df.with_columns([pl.col(sensor).cast(pl.Float64) for sensor in sensors])
 
-    # Calcula os valores mínimos, máximos e médios por dispositivo, ano-mês e sensor
+    # Agregação por sensor (mais rápido para poucos sensores)
     results = []
     for sensor in sensors:
-        if sensor in df.columns:
-            grouped = (
-                df.group_by(["device", "ano-mes"])
-                .agg(
-                    [
-                        pl.max(sensor).alias("valor_maximo"),
-                        pl.mean(sensor).alias("valor_medio"),
-                        pl.min(sensor).alias("valor_minimo"),
-                    ]
-                )
-                .with_columns(pl.lit(sensor).alias("sensor"))
+        grouped = (
+            df.group_by(["device", "ano-mes"])
+            .agg(
+                [
+                    pl.max(sensor).alias("valor_maximo"),
+                    pl.mean(sensor).alias("valor_medio"),
+                    pl.min(sensor).alias("valor_minimo"),
+                ]
             )
-            results.append(grouped)
+            .with_columns(pl.lit(sensor).alias("sensor"))
+        )
+        results.append(grouped)
 
-    # Combina os resultados de todos os sensores
     final_result = pl.concat(results)
-
-    # Ordena os resultados
     final_result = final_result.sort(["device", "ano-mes", "sensor"])
-
-    # Reorganiza as colunas no formato solicitado
     final_result = final_result.select(
-        ["device", "ano-mes", "sensor", "valor_maximo", "valor_medio", "valor_minimo"]
+        [
+            "device",
+            "ano-mes",
+            "sensor",
+            "valor_maximo",
+            "valor_medio",
+            "valor_minimo",
+        ]
     )
 
     return final_result
