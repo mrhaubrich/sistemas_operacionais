@@ -66,7 +66,10 @@ pid_t launch_python_process(const UDSInfo *uds_info, const char *script_path) {
 int establish_uds_server(const UDSInfo *uds_info) {
     if (!uds_info) return -1;
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        perror("[C] socket");
+        return -1;
+    }
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
@@ -75,10 +78,12 @@ int establish_uds_server(const UDSInfo *uds_info) {
 
     unlink(uds_info->uds_path);  // Remove se já existir
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("[C] bind");
         close(fd);
         return -1;
     }
     if (listen(fd, 1) < 0) {
+        perror("[C] listen");
         close(fd);
         return -1;
     }
@@ -90,7 +95,10 @@ int establish_uds_server(const UDSInfo *uds_info) {
 int send_csv_chunk(const UDSInfo *uds_info, const ThreadSafeQueue *queue) {
     if (!uds_info || !queue) return -1;
     int client_fd = accept(uds_info->socket_fd, NULL, NULL);
-    if (client_fd < 0) return -1;
+    if (client_fd < 0) {
+        perror("[C] accept");
+        return -1;
+    }
 
     size_t count = thread_safe_queue_get_count((ThreadSafeQueue *)queue);
     for (size_t i = 0; i < count; ++i) {
@@ -115,6 +123,7 @@ int send_csv_chunk(const UDSInfo *uds_info, const ThreadSafeQueue *queue) {
         }
         sent = send(client_fd, slice, slice_len, 0);
         if (sent < 0) {
+            perror("[C] send slice");
             close(client_fd);
             return -1;
         }

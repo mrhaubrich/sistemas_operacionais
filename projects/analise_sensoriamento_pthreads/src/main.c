@@ -25,49 +25,71 @@ void *worker_func(void *arg) {
     ThreadSafeQueue *queue = wargs->queue;
     const char *script_path = wargs->script_path;
 
-    UDSInfo uds_info;
-    generate_uds_path(id, &uds_info);
-    int server_fd = establish_uds_server(&uds_info);
-    if (server_fd < 0) {
-        wargs->line_counts[id] = 0;
-        wargs->results[id] = NULL;
-        wargs->result_sizes[id] = 0;
-        pthread_exit(NULL);
-    }
-    pid_t pid = launch_python_process(&uds_info, script_path);
-    if (pid < 0) {
-        cleanup_uds(&uds_info);
-        wargs->line_counts[id] = 0;
-        wargs->results[id] = NULL;
-        wargs->result_sizes[id] = 0;
-        pthread_exit(NULL);
-    }
-    // Envia o chunk para o processo Python
-    send_csv_chunk(&uds_info, queue);
+    int total_lines = 0;
+    char *final_result = NULL;
+    size_t final_result_size = 0;
 
-    // Recebe resultado processado e conta linhas
-    size_t buffer_size = 1024 * 1024;
-    char *buffer = malloc(buffer_size);
-    int received =
-        buffer ? receive_processed_csv(&uds_info, buffer, buffer_size) : -1;
-    int lines = 0;
-    if (received > 0) {
-        for (int j = 0; j < received; ++j)
-            if (buffer[j] == '\n') lines++;
-        wargs->results[id] = buffer;
-        wargs->result_sizes[id] = (size_t)received;
-    } else {
+    while (1) {
+        // Try to dequeue a chunk from the queue
+        const char *slice = NULL;
+        size_t slice_len = 0;
+        const char *header = NULL;
+        size_t header_len = 0;
+        int dq = thread_safe_queue_dequeue(queue, &slice, &slice_len, &header,
+                                           &header_len);
+        if (dq != 0) {
+            // Queue is empty
+            break;
+        }
+
+        UDSInfo uds_info;
+        generate_uds_path(id, &uds_info);
+        int server_fd = establish_uds_server(&uds_info);
+        if (server_fd < 0) {
+            continue;
+        }
+        pid_t pid = launch_python_process(&uds_info, script_path);
+        if (pid < 0) {
+            cleanup_uds(&uds_info);
+            continue;
+        }
+
+        // Send the chunk to the Python process
+        // We need to create a temporary queue for this chunk
+        ThreadSafeQueue *single_queue = thread_safe_queue_create();
+        thread_safe_queue_enqueue(single_queue, slice, slice_len, header,
+                                  header_len);
+        send_csv_chunk(&uds_info, single_queue);
+        thread_safe_queue_destroy(single_queue);
+
+        // Receive processed result and count lines
+        size_t buffer_size = 1024 * 1024;
+        char *buffer = malloc(buffer_size);
+        int received =
+            buffer ? receive_processed_csv(&uds_info, buffer, buffer_size) : -1;
+        if (received > 0) {
+            int lines = 0;
+            for (int j = 0; j < received; ++j)
+                if (buffer[j] == '\n') lines++;
+            total_lines += lines;
+            // Concatenate results if needed
+            char *new_result =
+                realloc(final_result, final_result_size + received);
+            if (new_result) {
+                memcpy(new_result + final_result_size, buffer, received);
+                final_result = new_result;
+                final_result_size += received;
+            }
+        }
         if (buffer) free(buffer);
-        wargs->results[id] = NULL;
-        wargs->result_sizes[id] = 0;
+
+        if (pid > 0) waitpid(pid, NULL, 0);
+        cleanup_uds(&uds_info);
     }
-    wargs->line_counts[id] = lines;
 
-    // Aguarda processo filho e limpa UDS
-    if (pid > 0) waitpid(pid, NULL, 0);
-    cleanup_uds(&uds_info);
-
-    printf("Thread %d completed processing.\n", id);
+    wargs->line_counts[id] = total_lines;
+    wargs->results[id] = final_result;
+    wargs->result_sizes[id] = final_result_size;
 
     pthread_exit(NULL);
 }
@@ -146,11 +168,11 @@ int main(int argc, char *argv[]) {
     size_t *result_sizes = calloc(num_chunks, sizeof(size_t));
     if (!threads || !args || !line_counts || !results || !result_sizes) {
         fprintf(stderr, "Falha ao alocar recursos de threads\n");
-        free(threads);
-        free(args);
-        free(line_counts);
-        free(results);
-        free(result_sizes);
+        if (threads) free(threads);
+        if (args) free(args);
+        if (line_counts) free(line_counts);
+        if (results) free(results);
+        if (result_sizes) free(result_sizes);
         thread_safe_queue_destroy(queue);
         unmap_csv(&mappedCsv);
         return EXIT_FAILURE;
@@ -177,9 +199,16 @@ int main(int argc, char *argv[]) {
         total_lines += line_counts[i];
     }
 
+    // Limpeza antecipada dos arrays de contagem e argumentos
+    free(threads);
+    free(args);
+    free(line_counts);
+    thread_safe_queue_destroy(queue);
+    unmap_csv(&mappedCsv);
+
     // Print first 10 lines of all returned CSVs
     printf("\nPrimeiras 10 linhas retornadas por todos os CSVs processados:\n");
-    for (size_t i = 0; i < num_chunks; ++i) {
+    for (size_t i = 0; i < n_cpus; ++i) {
         printf("Thread %zu: %d linhas\n", i, line_counts[i]);
         if (results[i] && result_sizes[i] > 0) {
             int line = 0;
@@ -205,17 +234,14 @@ int main(int argc, char *argv[]) {
     printf("\nTotal de linhas retornadas por todos os CSVs processados: %d\n",
            total_lines);
 
-    // Limpeza
+    // TODO: Aqui vamos ter que mergar os resultados
+
+    // Limpeza final dos resultados
     for (size_t i = 0; i < num_chunks; ++i) {
         if (results[i]) free(results[i]);
     }
-    free(threads);
-    free(args);
-    free(line_counts);
     free(results);
     free(result_sizes);
-    thread_safe_queue_destroy(queue);
-    unmap_csv(&mappedCsv);
     printf("\nArquivo desmapeado e recursos liberados\n");
 
     return EXIT_SUCCESS;

@@ -9,21 +9,20 @@ import polars as pl
 
 
 def read_csv_from_socket(uds_path):
-    # Conecta ao servidor UDS e lê os dados do CSV
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
         client_socket.connect(uds_path)
         data = b""
         while True:
-            chunk = client_socket.recv(4096)
+            chunk = client_socket.recv(40960)
             if not chunk:
                 break
             data += chunk
-    return io.StringIO(data.decode("us-ascii"))
+    return io.StringIO(data.decode("utf-8"))
 
 
 def read_csv_from_file(file_path):
     # Lê os dados do CSV de um arquivo
-    with open(file_path, "r", encoding="us-ascii") as file:
+    with open(file_path, "r", encoding="utf-8") as file:
         return io.StringIO(file.read())
 
 
@@ -97,12 +96,9 @@ def analyze_csv_data(csv_data):
 
 
 def process_csv_data(uds_path):
-    # Lê os dados do socket e processa
     csv_data = read_csv_from_socket(uds_path)
     result = analyze_csv_data(csv_data)
     result_csv = result.write_csv()
-
-    # Envia o CSV processado de volta para o servidor
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client_socket:
         client_socket.connect(uds_path)
         client_socket.sendall(result_csv.encode("utf-8"))

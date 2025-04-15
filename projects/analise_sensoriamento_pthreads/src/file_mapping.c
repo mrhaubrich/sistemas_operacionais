@@ -95,24 +95,33 @@ MappedFile map_file(const char *filepath) {
 
 /**
  * Desmapeia um arquivo previamente mapeado e libera os recursos associados
- * @param ficsvle Ponteiro para a estrutura MappedCSV
+ * @param csv Ponteiro para a estrutura MappedCSV
  */
 void unmap_csv(MappedCSV *csv) {
-    if (!csv || !csv->header || !csv->line_indices) {
-        return;
-    }
+    if (!csv) return;
 
-    // Libera o array de índice de linhas
-    free((void *)csv->header);
+    // Free header only if it was allocated (not just pointed to mmap region)
+    if (csv->header && csv->mapped_data &&
+        (csv->header < (const char *)csv->mapped_data ||
+         csv->header >= (const char *)csv->mapped_data + csv->size)) {
+        free((void *)csv->header);
+    }
     csv->header = NULL;
+
+    // Free the original line_indices array if present
+    if (csv->allocated_line_indices) {
+        free((void *)csv->allocated_line_indices);
+        csv->allocated_line_indices = NULL;
+    }
     csv->line_indices = NULL;
     csv->data_count = 0;
 
-    // Desmapeia o arquivo
-    munmap((void *)csv->header, csv->size);
-    csv->header = NULL;
+    // Unmap the original mapped file if possible
+    if (csv->mapped_data && csv->size > 0) {
+        munmap(csv->mapped_data, csv->size);
+        csv->mapped_data = NULL;
+    }
     csv->size = 0;
-    csv->data_count = 0;
 }
 
 /**
@@ -158,7 +167,7 @@ char *get_line(const MappedCSV *csv, int line_number, int *line_length) {
  */
 MappedCSV map_csv(const char *filepath) {
     MappedFile temp_result = map_file(filepath);
-    MappedCSV result = {NULL, NULL, 0, 0};
+    MappedCSV result = {NULL, NULL, 0, 0, NULL, NULL};
 
     if (temp_result.data == NULL) {
         return result;
@@ -166,6 +175,8 @@ MappedCSV map_csv(const char *filepath) {
 
     // Define o cabeçalho para apontar para o início do arquivo
     result.header = temp_result.data;
+    result.mapped_data = temp_result.data;
+    result.allocated_line_indices = temp_result.line_indices;
 
     // Encontra o primeiro caractere de nova linha para separar o cabeçalho dos
     // dados

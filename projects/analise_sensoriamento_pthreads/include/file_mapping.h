@@ -22,6 +22,9 @@ typedef struct {
     const char **line_indices;  // Array de ponteiros para o início das linhas
     int data_count;             // Número de linhas no arquivo CSV
     size_t size;                // Tamanho dos dados mapeados em bytes
+    void *mapped_data;          // Ponteiro original para a região mmap
+    const char *
+        *allocated_line_indices;  // Ponteiro original do array de índices
 } MappedCSV;
 
 /**
