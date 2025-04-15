@@ -49,37 +49,42 @@ def normalize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def analyze_csv_data(csv_data):
-    # Analisa os dados do CSV usando polars
-    df = pl.read_csv(csv_data, separator="|")
-    df = normalize_dataframe(df)
-
-    # Converte a coluna 'data' para datetime e cria a coluna 'ano-mes'
+    df = pl.read_csv(csv_data, separator="|", infer_schema_length=0)
+    # Drop unnecessary columns and nulls, filter device
+    drop_cols = [col for col in ["id", "latitude", "longitude"] if col in df.columns]
+    df = df.drop(drop_cols).drop_nulls()
+    if "device" not in df.columns:
+        raise ValueError("O DataFrame não contém a coluna 'device'.")
+    df = df.filter(df["device"].is_not_null())
+    if df.is_empty():
+        raise ValueError("O DataFrame está vazio após a normalização.")
+    # Date conversion and ano-mes
     df = df.with_columns(
         [
             df["data"]
             .str.split(" ")
             .list.get(0)
             .str.strptime(pl.Datetime, format="%Y-%m-%d")
-            .alias("data"),
+            .alias("data")
         ]
     )
-    df = df.with_columns(
-        [
-            df["data"].dt.strftime("%Y-%m").alias("ano-mes"),
-        ]
-    )
-
-    # Lista de sensores para análise
+    df = df.with_columns([df["data"].dt.strftime("%Y-%m").alias("ano-mes")])
+    # Sensor columns
     sensors = [
         col
         for col in ["temperatura", "umidade", "luminosidade", "ruido", "eco2", "etvoc"]
         if col in df.columns
     ]
-
-    # Converta os sensores para valores numéricos em lote
-    df = df.with_columns([pl.col(sensor).cast(pl.Float64) for sensor in sensors])
-
-    # Agregação por sensor (mais rápido para poucos sensores)
+    # Only cast if not already Float64
+    df = df.with_columns(
+        [
+            pl.col(sensor).cast(pl.Float64)
+            if df[sensor].dtype != pl.Float64
+            else pl.col(sensor)
+            for sensor in sensors
+        ]
+    )
+    # Aggregation
     results = []
     for sensor in sensors:
         grouped = (
@@ -94,20 +99,10 @@ def analyze_csv_data(csv_data):
             .with_columns(pl.lit(sensor).alias("sensor"))
         )
         results.append(grouped)
-
     final_result = pl.concat(results)
-    final_result = final_result.sort(["device", "ano-mes", "sensor"])
-    final_result = final_result.select(
-        [
-            "device",
-            "ano-mes",
-            "sensor",
-            "valor_maximo",
-            "valor_medio",
-            "valor_minimo",
-        ]
+    final_result = final_result.sort(["device", "ano-mes", "sensor"]).select(
+        ["device", "ano-mes", "sensor", "valor_maximo", "valor_medio", "valor_minimo"]
     )
-
     return final_result
 
 
