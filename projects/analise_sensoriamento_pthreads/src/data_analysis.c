@@ -28,10 +28,11 @@ int partition_csv(const CSVFile *csv, size_t chunk_size,
                          ? (line + chunk_size)
                          : (size_t)csv->line_count;
         // Use offsets to get pointers into the mmap'd data
-        const char *start_ptr = csv->base + csv->lines[start].id.start_offset;
+        const char *start_ptr =
+            csv->base + csv->lines[start].device.start_offset;
         const char *end_ptr =
             (end < (size_t)csv->line_count)
-                ? (csv->base + csv->lines[end].id.start_offset)
+                ? (csv->base + csv->lines[end].device.start_offset)
                 : (csv->base +
                    csv->lines[csv->line_count - 1].etvoc.end_offset);
         size_t data_len = end_ptr - start_ptr;

@@ -72,14 +72,10 @@ void print_lines_range(CSVFile csv, int start_line, int num_lines) {
            end_line, total_lines);
 
     for (int i = start_line; i < end_line; i++) {
-        // char *id = csvfield_to_string(&csv, &csv.lines[i].id);
         char *device = csvfield_to_string(&csv, &csv.lines[i].device);
-        // char *contagem = csvfield_to_string(&csv, &csv.lines[i].contagem);
         char *data = csvfield_to_string(&csv, &csv.lines[i].data);
-        printf("%s|%s|...\n", device, data);
-        // free(id);
+        printf("%s|...|%s|...\n", device, data);
         free(device);
-        // free(contagem);
         free(data);
     }
 

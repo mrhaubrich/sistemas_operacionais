@@ -10,9 +10,7 @@ typedef struct {
 } CSVField;
 
 typedef struct {
-    CSVField id;
     CSVField device;
-    CSVField contagem;
     CSVField data;
     CSVField temperatura;
     CSVField umidade;

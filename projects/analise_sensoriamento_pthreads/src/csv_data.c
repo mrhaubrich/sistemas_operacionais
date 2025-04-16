@@ -18,10 +18,9 @@ static CSVLine parse_csv_line(const char *start, const char *end,
     CSVLine line;
     const char *field_start = start;
     const char *field_end = start;
-    CSVField *fields[] = {&line.id,           &line.device,      &line.contagem,
-                          &line.data,         &line.temperatura, &line.umidade,
-                          &line.luminosidade, &line.ruido,       &line.eco2,
-                          &line.etvoc};
+    CSVField *fields[] = {&line.device,  &line.data,         &line.temperatura,
+                          &line.umidade, &line.luminosidade, &line.ruido,
+                          &line.eco2,    &line.etvoc};
     size_t num_fields = sizeof(fields) / sizeof(fields[0]);
 
     for (size_t i = 0; i < num_fields; ++i) {
