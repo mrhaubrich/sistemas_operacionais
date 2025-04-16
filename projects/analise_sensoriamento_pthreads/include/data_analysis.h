@@ -7,7 +7,7 @@
 #include <sys/un.h>      // Para sockaddr_un
 #include <unistd.h>      // Para fork e exec
 
-#include "file_mapping.h"  // Inclusão para MappedCSV
+#include "csv_data.h"  // Inclusão para CSVFile
 #include "thread_safe_queue.h"
 
 // Estrutura para representar informações do UDS
@@ -20,7 +20,7 @@ typedef struct {
 // Protótipos de funções
 /**
  * Particiona o arquivo CSV em pedaços menores.
- * @param csv Estrutura MappedCSV representando o arquivo CSV mapeado.
+ * @param csv Estrutura CSVFile representando o arquivo CSV mapeado.
  * @param chunk_size Número de linhas ou bytes por pedaço.
  * @param queue Fila de espera para armazenar os pedaços.
  * @return Número de pedaços criados.
@@ -29,7 +29,7 @@ typedef struct {
  * especificado (chunk_size). Cada pedaço deve ser armazenado na estrutura
  * DataChunk fornecida no array chunks.
  */
-int partition_csv(const MappedCSV *csv, size_t chunk_size,
+int partition_csv(const CSVFile *csv, size_t chunk_size,
                   ThreadSafeQueue *queue);
 
 /**

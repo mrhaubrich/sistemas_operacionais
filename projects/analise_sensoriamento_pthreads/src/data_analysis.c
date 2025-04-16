@@ -7,36 +7,42 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+#include "../include/csv_data.h"
 extern char **environ;
 
 // Particiona o arquivo CSV em pedaços menores e enfileira-os na fila.
-int partition_csv(const MappedCSV *csv, size_t chunk_size,
+int partition_csv(const CSVFile *csv, size_t chunk_size,
                   ThreadSafeQueue *queue) {
     if (!csv || !queue || chunk_size == 0) return 0;
 
     size_t chunk_count = 0;
     size_t line = 0;
-    size_t header_len = strlen(csv->header);
+    // Get header as string
+    char *header_str = csvfield_to_string(csv, &csv->header);
+    size_t header_len = header_str ? strlen(header_str) : 0;
 
-    while (line < (size_t)csv->data_count) {
+    while (line < (size_t)csv->line_count) {
         size_t start = line;
-        size_t end = (line + chunk_size < (size_t)csv->data_count)
+        size_t end = (line + chunk_size < (size_t)csv->line_count)
                          ? (line + chunk_size)
-                         : (size_t)csv->data_count;
-        const char *start_ptr = csv->line_indices[start];
+                         : (size_t)csv->line_count;
+        // Use offsets to get pointers into the mmap'd data
+        const char *start_ptr = csv->base + csv->lines[start].id.start_offset;
         const char *end_ptr =
-            (end < (size_t)csv->data_count)
-                ? csv->line_indices[end]
-                : (csv->line_indices[csv->data_count - 1] +
-                   strlen(csv->line_indices[csv->data_count - 1]));
+            (end < (size_t)csv->line_count)
+                ? (csv->base + csv->lines[end].id.start_offset)
+                : (csv->base +
+                   csv->lines[csv->line_count - 1].etvoc.end_offset);
         size_t data_len = end_ptr - start_ptr;
 
         // Enfileira o ponteiro, tamanho do chunk, header e tamanho do header
-        thread_safe_queue_enqueue(queue, start_ptr, data_len, csv->header,
+        thread_safe_queue_enqueue(queue, start_ptr, data_len, header_str,
                                   header_len);
         chunk_count++;
         line = end;
     }
+    if (header_str) free(header_str);
     return chunk_count;
 }
 

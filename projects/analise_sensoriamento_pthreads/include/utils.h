@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 
+#include "csv_data.h"
 #include "file_mapping.h"
 
 /**
@@ -21,18 +22,12 @@ bool validate_csv_extension(const char *filename);
 bool validate_args(int argc, char *argv[]);
 
 /**
- * Obtém o número de processadores disponíveis no sistema
- * @return Número de processadores disponíveis
- */
-int get_available_number_of_processors(void);
-
-/**
  * Imprime as primeiras n linhas de um arquivo mapeado
  * @param file O arquivo mapeado
  * @param n Número de linhas a serem impressas (se n <= 0, imprime todas as
  * linhas)
  */
-void print_first_n_lines(MappedCSV csv, int n);
+void print_first_n_lines(CSVFile csv, int n);
 
 /**
  * Imprime um intervalo de linhas de um arquivo CSV mapeado
@@ -40,7 +35,7 @@ void print_first_n_lines(MappedCSV csv, int n);
  * @param start_line A primeira linha a ser impressa (base 0)
  * @param num_lines Número de linhas a serem impressas
  */
-void print_lines_range(MappedCSV csv, int start_line, int num_lines);
+void print_lines_range(CSVFile csv, int start_line, int num_lines);
 
 /**
  * Cria uma representação formatada de um tamanho de memória
@@ -54,6 +49,6 @@ void format_size(size_t size, char *buffer, size_t buffer_size);
  * Imprime informações sobre um arquivo CSV mapeado
  * @param csv O arquivo CSV mapeado
  */
-void print_csv_info(const MappedCSV *csv);
+void print_csv_info(const CSVFile *csv);
 
 #endif  // UTILS_H

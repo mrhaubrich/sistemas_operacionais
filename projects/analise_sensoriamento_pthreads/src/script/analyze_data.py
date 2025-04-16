@@ -48,7 +48,7 @@ def normalize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def analyze_csv_data(csv_data):
+def analyze_csv_data(csv_data) -> pl.DataFrame:
     df = pl.read_csv(csv_data, separator="|", infer_schema_length=0)
     # Drop unnecessary columns and nulls, filter device
     drop_cols = [col for col in ["id", "latitude", "longitude"] if col in df.columns]
@@ -134,4 +134,5 @@ if __name__ == "__main__":
         result = analyze_csv_data(csv_data)
         print(result)
         # print(result.write_csv())
+        print(result.group_by("device").agg(pl.count()))
         print(len(result))

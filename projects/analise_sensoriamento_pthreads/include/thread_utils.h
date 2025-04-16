@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <stddef.h>
+#include <sys/sysinfo.h>
 
 /**
  * Estrutura contendo dados para o trabalho de uma única thread em um segmento
@@ -118,5 +119,35 @@ const char **merge_line_indices(ThreadResources *resources);
  */
 int remove_duplicate_line_indices(const char **line_indices, int total_lines,
                                   int num_duplicates);
+
+/**CSVLine
+ * Tipo de callback para processar cada linha em paralelo
+ */
+typedef void (*LineCallback)(const char *line_start, size_t line_len,
+                             void *user_data);
+
+/**
+ * Processa cada linha de um buffer em paralelo, aplicando um callback
+ * fornecido.
+ * @param data Ponteiro para o buffer de dados
+ * @param size Tamanho do buffer de dados
+ * @param num_threads Número de threads a usar
+ * @param callback Função callback a ser chamada para cada linha
+ * @param user_data Ponteiro para dados do usuário (passado ao callback)
+ * @param line_index_ptr (Opcional) ponteiro para armazenar índice de linhas
+ * @param total_lines_ptr (Opcional) ponteiro para armazenar número de linhas
+ */
+void parallel_process_lines(const char *data, size_t size, int num_threads,
+                            LineCallback callback, void *user_data,
+                            const char ***line_index_ptr, int *total_lines_ptr);
+
+/**
+ * Obtém o número de processadores disponíveis no sistema
+ * @return Número de processadores disponíveis
+ */
+static inline int get_available_number_of_processors(void) {
+    int nprocs = get_nprocs();
+    return nprocs > 0 ? nprocs : 1;  // Sempre retorna pelo menos 1
+}
 
 #endif  // THREAD_UTILS_H

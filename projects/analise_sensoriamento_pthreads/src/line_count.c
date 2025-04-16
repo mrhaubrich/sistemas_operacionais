@@ -40,6 +40,21 @@ int count_lines_in_memory(const char *data, size_t size) {
 }
 
 /**
+ * Tipo de callback para processar cada linha em paralelo
+ */
+typedef void (*LineCallback)(const char *line_start, size_t line_len,
+                             void *user_data);
+
+/**
+ * Callback para contar linhas (incrementa um contador)
+ */
+static void count_line_callback(const char *line_start, size_t line_len,
+                                void *user_data) {
+    int *count = (int *)user_data;
+    (*count)++;
+}
+
+/**
  * Contar linhas em paralelo e construir um índice de linhas para o buffer de
  * dados fornecido
  * @param data Ponteiro para o buffer de dados
@@ -59,7 +74,6 @@ int count_lines_in_memory_parallel(const char *data, size_t size,
     }
 
     // Para arquivos pequenos (menos de 100KB), usar processamento sequencial
-    // para evitar sobrecarga de threads
     if (size < 102400) {
         int line_count = count_lines_in_memory(data, size);
 
@@ -99,67 +113,14 @@ int count_lines_in_memory_parallel(const char *data, size_t size,
     // Para arquivos maiores, usar processamento paralelo
     int total_line_count = 0;
     const int num_threads = get_available_number_of_processors();
+    int actual_threads = (size < 1048576) ? 2 : num_threads;
 
-    // Limitar o número de threads para arquivos pequenos para evitar sobrecarga
-    int actual_threads =
-        (size < 1048576)
-            ? 2
-            : num_threads;  // Usar menos threads para arquivos < 1MB
+    // Novo: usar utilitário genérico para processar cada linha em paralelo
+    int counted_lines = 0;
+    parallel_process_lines(data, size, actual_threads, count_line_callback,
+                           &counted_lines, line_index_ptr, total_lines_ptr);
 
-    ThreadResources *resources = allocate_thread_resources(actual_threads);
-    if (!resources) {
-        fprintf(stderr, "Falha ao alocar memória para threads\n");
-        if (line_index_ptr) *line_index_ptr = NULL;
-        if (total_lines_ptr) *total_lines_ptr = 0;
-        return count_lines_in_memory(
-            data,
-            size);  // Alternativa para contagem sequencial
-    }
-
-    if (start_threads(resources, data, size) != 0) {
-        fprintf(stderr, "Falha ao iniciar threads\n");
-        free_thread_resources(resources);
-        if (line_index_ptr) *line_index_ptr = NULL;
-        if (total_lines_ptr) *total_lines_ptr = 0;
-        return count_lines_in_memory(
-            data,
-            size);  // Alternativa para contagem sequencial
-    }
-
-    total_line_count = join_threads_and_collect_results(resources);
-
-    // Mesclar todos os índices de linhas locais das threads em um índice global
-    const char **global_index = merge_line_indices(resources);
-    int total_indexed_lines = resources->total_lines;
-
-    if (!global_index) {
-        fprintf(stderr, "Falha ao mesclar índices de linhas\n");
-        if (line_index_ptr) *line_index_ptr = NULL;
-        if (total_lines_ptr) *total_lines_ptr = 0;
-    } else {
-        printf(
-            "Índice global de linhas criado com sucesso com %d linhas "
-            "indexadas\n",
-            total_indexed_lines);
-
-        if (line_index_ptr) *line_index_ptr = global_index;
-        if (total_lines_ptr) *total_lines_ptr = total_indexed_lines;
-    }
-
-    // Corrigir linhas duplicadas nos limites das threads
-    int duplicates = correct_duplicate_lines(resources->thread_data,
-                                             actual_threads, data, size);
-    total_line_count -= duplicates;
-
-    if (duplicates > 0) {
-        printf("Corrigidas %d linhas duplicadas\n", duplicates);
-    }
-
-    // Transferir propriedade do índice de linhas para o chamador
-    resources->global_line_index = NULL;
-    free_thread_resources(resources);
-
-    return total_line_count;
+    return counted_lines;
 }
 
 /**

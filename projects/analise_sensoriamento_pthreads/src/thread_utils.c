@@ -347,3 +347,134 @@ int remove_duplicate_line_indices(const char **line_indices, int total_lines,
 
     return removed;
 }
+
+typedef struct {
+    const char *start;
+    size_t size;
+    LineCallback callback;
+    void *user_data;
+    const char **line_indices;
+    int index_capacity;
+    int index_count;
+} GenericThreadData;
+
+static void *generic_line_worker(void *arg) {
+    GenericThreadData *data = (GenericThreadData *)arg;
+    if (!data || !data->start) return NULL;
+
+    const char *p = data->start;
+    const char *end = p + data->size;
+
+    // Registrar o início da primeira linha
+    if (p < end && data->line_indices) {
+        if (data->index_count < data->index_capacity)
+            data->line_indices[data->index_count++] = p;
+    }
+
+    while (p < end) {
+        const char *nl = memchr(p, '\n', end - p);
+        size_t line_len;
+        if (nl) {
+            line_len = nl - p;
+        } else {
+            line_len = end - p;
+        }
+        // Chama o callback para cada linha
+        if (data->callback) data->callback(p, line_len, data->user_data);
+
+        // Indexação opcional
+        if (nl && data->line_indices && (nl + 1 < end)) {
+            if (data->index_count < data->index_capacity)
+                data->line_indices[data->index_count++] = nl + 1;
+        }
+
+        if (nl)
+            p = nl + 1;
+        else
+            break;
+    }
+    return NULL;
+}
+
+void parallel_process_lines(const char *data, size_t size, int num_threads,
+                            LineCallback callback, void *user_data,
+                            const char ***line_index_ptr,
+                            int *total_lines_ptr) {
+    if (!data || size == 0 || num_threads <= 0) {
+        if (line_index_ptr) *line_index_ptr = NULL;
+        if (total_lines_ptr) *total_lines_ptr = 0;
+        return;
+    }
+
+    pthread_t *threads = malloc(sizeof(pthread_t) * num_threads);
+    GenericThreadData *thread_data =
+        malloc(sizeof(GenericThreadData) * num_threads);
+
+    // Estimar número máximo de linhas para indexação (superestimativa)
+    int max_lines = size / 16 + 2;
+    const char **global_index = NULL;
+    if (line_index_ptr) {
+        global_index = malloc(sizeof(const char *) * max_lines);
+    }
+
+    int global_index_count = 0;
+    size_t current_offset = 0;
+
+    for (int i = 0; i < num_threads; ++i) {
+        size_t block_size = calculate_block_size(i, num_threads, size);
+
+        // Ajuste de limites para não cortar linhas no meio
+        const char *block_start = data + current_offset;
+        const char *block_end = block_start + block_size;
+        if (i > 0 && block_start < data + size) {
+            // Avançar até próxima linha
+            while (block_start < data + size && *block_start != '\n')
+                block_start++;
+            if (block_start < data + size && *block_start == '\n')
+                block_start++;
+        }
+        if (block_end > data + size) block_end = data + size;
+
+        thread_data[i].start = block_start;
+        thread_data[i].size = block_end - block_start;
+        thread_data[i].callback = callback;
+        thread_data[i].user_data = user_data;
+        thread_data[i].line_indices = NULL;
+        thread_data[i].index_capacity = 0;
+        thread_data[i].index_count = 0;
+
+        if (line_index_ptr && global_index) {
+            // Divida a capacidade igualmente (aproximação)
+            thread_data[i].line_indices =
+                (const char **)(global_index + global_index_count);
+            thread_data[i].index_capacity = max_lines / num_threads;
+            thread_data[i].index_count = 0;
+        }
+
+        pthread_create(&threads[i], NULL, generic_line_worker, &thread_data[i]);
+        current_offset = block_end - data;
+        if (line_index_ptr && global_index)
+            global_index_count += thread_data[i].index_capacity;
+    }
+
+    int total_lines = 0;
+    int total_indexed = 0;
+    for (int i = 0; i < num_threads; ++i) {
+        pthread_join(threads[i], NULL);
+        // Para contagem, o callback deve atualizar user_data
+        if (line_index_ptr && global_index) {
+            total_indexed += thread_data[i].index_count;
+        }
+    }
+
+    if (line_index_ptr) {
+        *line_index_ptr = global_index;
+        if (total_lines_ptr) *total_lines_ptr = total_indexed;
+    } else {
+        if (global_index) free((void *)global_index);
+        if (total_lines_ptr) *total_lines_ptr = 0;
+    }
+
+    free(threads);
+    free(thread_data);
+}
