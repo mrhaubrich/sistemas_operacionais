@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>  // Added for gettimeofday function
 #include <sys/un.h>
 #include <unistd.h>
 extern char **environ;
@@ -308,6 +309,317 @@ int partition_csv_by_device(const DeviceMappedCSV *csv,
         free(device_ids[i]);
     }
     free(device_ids);
+
+    return chunks_created;
+}
+
+/**
+ * Particiona o arquivo CSV por dispositivo com agrupamento inteligente.
+ * Dispositivos pequenos são agrupados para reduzir overhead de processamento.
+ */
+int partition_csv_by_device_optimized(const DeviceMappedCSV *csv,
+                                      ThreadSafeQueue *queue) {
+    if (!csv || !queue || !csv->device_table) return 0;
+
+    struct timeval start_time, end_time;
+    double elapsed_ms;
+    gettimeofday(&start_time, NULL);
+
+    // Obter todos os dispositivos únicos
+    int device_count = 0;
+    char **device_ids =
+        device_hash_table_get_all_devices(csv->device_table, &device_count);
+
+    if (!device_ids || device_count == 0) return 0;
+
+    size_t header_len = strlen(csv->header);
+    int chunks_created = 0;
+    const char *file_start = csv->mapped_data;
+    const char *file_end = file_start + csv->size;
+
+    // Parâmetros para agrupar dispositivos pequenos
+    const int SMALL_DEVICE_THRESHOLD =
+        100;  // Dispositivos com menos de 100 linhas
+    const int LINES_PER_CHUNK_TARGET = 10000;  // Aprox. linhas por chunk
+
+    printf(
+        "[CHUNKING] Smart binning devices: grouping small devices (<%d lines) "
+        "into chunks of ~%d lines\n",
+        SMALL_DEVICE_THRESHOLD, LINES_PER_CHUNK_TARGET);
+
+    // Classificar dispositivos em pequenos e grandes
+    typedef struct {
+        char *device_id;
+        int line_count;
+    } DeviceInfo;
+
+    DeviceInfo *small_devices = malloc(device_count * sizeof(DeviceInfo));
+    DeviceInfo *large_devices = malloc(device_count * sizeof(DeviceInfo));
+    int small_count = 0;
+    int large_count = 0;
+
+    if (!small_devices || !large_devices) {
+        fprintf(stderr, "Failed to allocate memory for device sorting\n");
+        // Cleanup
+        for (int i = 0; i < device_count; i++) {
+            free(device_ids[i]);
+        }
+        free(device_ids);
+        if (small_devices) free(small_devices);
+        if (large_devices) free(large_devices);
+        return 0;
+    }
+
+    // Classificar dispositivos por tamanho
+    for (int i = 0; i < device_count; i++) {
+        int line_count = 0;
+        device_hash_table_get_lines(csv->device_table, device_ids[i],
+                                    &line_count);
+
+        if (line_count < SMALL_DEVICE_THRESHOLD) {
+            small_devices[small_count].device_id = device_ids[i];
+            small_devices[small_count].line_count = line_count;
+            small_count++;
+        } else {
+            large_devices[large_count].device_id = device_ids[i];
+            large_devices[large_count].line_count = line_count;
+            large_count++;
+        }
+    }
+
+    printf("[CHUNKING] Classified %d devices as small, %d as large\n",
+           small_count, large_count);
+
+    // Buffer reuse strategy - use larger buffer for efficiency
+    const size_t BUFFER_SIZE = 1024 * 1024;  // 1MB buffer
+    char *reusable_buffer = malloc(BUFFER_SIZE);
+    if (!reusable_buffer) {
+        fprintf(stderr, "Failed to allocate reusable buffer\n");
+        // Cleanup code
+        free(small_devices);
+        free(large_devices);
+        for (int i = 0; i < device_count; i++) {
+            free(device_ids[i]);
+        }
+        free(device_ids);
+        return 0;
+    }
+
+    // 1. Processar dispositivos grandes individualmente
+    printf("[CHUNKING] Processing %d large devices individually\n",
+           large_count);
+    for (int i = 0; i < large_count; i++) {
+        int line_count = 0;
+        const char **device_lines = device_hash_table_get_lines(
+            csv->device_table, large_devices[i].device_id, &line_count);
+
+        if (!device_lines || line_count == 0) continue;
+
+        // Reset buffer
+        char *buffer_ptr = reusable_buffer;
+        size_t bytes_written = 0;
+
+        // Copy device data to buffer
+        for (int j = 0; j < line_count; j++) {
+            if (device_lines[j] >= file_start && device_lines[j] < file_end) {
+                const char *line_end =
+                    memchr(device_lines[j], '\n', file_end - device_lines[j]);
+                if (!line_end) line_end = file_end;
+
+                size_t line_len = line_end - device_lines[j];
+
+                // Check if we need to flush buffer
+                if (bytes_written + line_len + 2 >= BUFFER_SIZE) {
+                    // Create chunk from current buffer
+                    char *chunk_data = malloc(bytes_written + 1);
+                    if (chunk_data) {
+                        memcpy(chunk_data, reusable_buffer, bytes_written);
+                        chunk_data[bytes_written] = '\0';
+                        thread_safe_queue_enqueue(queue, chunk_data,
+                                                  bytes_written, csv->header,
+                                                  header_len);
+                        chunks_created++;
+                    }
+
+                    // Reset buffer
+                    buffer_ptr = reusable_buffer;
+                    bytes_written = 0;
+                }
+
+                // Copy line to buffer
+                memcpy(buffer_ptr, device_lines[j], line_len);
+                buffer_ptr += line_len;
+                bytes_written += line_len;
+
+                // Add newline if needed
+                if (j < line_count - 1 && *(buffer_ptr - 1) != '\n') {
+                    *buffer_ptr++ = '\n';
+                    bytes_written++;
+                }
+            }
+        }
+
+        // Create final chunk if any data remains
+        if (bytes_written > 0) {
+            char *chunk_data = malloc(bytes_written + 1);
+            if (chunk_data) {
+                memcpy(chunk_data, reusable_buffer, bytes_written);
+                chunk_data[bytes_written] = '\0';
+                thread_safe_queue_enqueue(queue, chunk_data, bytes_written,
+                                          csv->header, header_len);
+                chunks_created++;
+            }
+        }
+    }
+
+    // 2. Agrupar dispositivos pequenos em chunks balanceados
+    printf("[CHUNKING] Grouping %d small devices into balanced chunks\n",
+           small_count);
+
+    if (small_count > 0) {
+        // Sort small devices by line count (descending) for better balancing
+        // Using bubble sort as the dataset is typically small
+        for (int i = 0; i < small_count - 1; i++) {
+            for (int j = 0; j < small_count - i - 1; j++) {
+                if (small_devices[j].line_count <
+                    small_devices[j + 1].line_count) {
+                    DeviceInfo temp = small_devices[j];
+                    small_devices[j] = small_devices[j + 1];
+                    small_devices[j + 1] = temp;
+                }
+            }
+        }
+
+        // Group small devices into chunks
+        int current_lines = 0;
+        int devices_in_chunk = 0;
+        char *buffer_ptr = reusable_buffer;
+        size_t bytes_written = 0;
+
+        for (int i = 0; i < small_count; i++) {
+            int line_count = 0;
+            const char **device_lines = device_hash_table_get_lines(
+                csv->device_table, small_devices[i].device_id, &line_count);
+
+            if (!device_lines || line_count == 0) continue;
+
+            // Create a new chunk if this device would exceed our target
+            // or if buffer is getting full
+            if ((current_lines > 0 &&
+                 current_lines + line_count > LINES_PER_CHUNK_TARGET) ||
+                (bytes_written > BUFFER_SIZE / 2)) {
+                // Create chunk from current buffer
+                if (bytes_written > 0) {
+                    char *chunk_data = malloc(bytes_written + 1);
+                    if (chunk_data) {
+                        memcpy(chunk_data, reusable_buffer, bytes_written);
+                        chunk_data[bytes_written] = '\0';
+                        thread_safe_queue_enqueue(queue, chunk_data,
+                                                  bytes_written, csv->header,
+                                                  header_len);
+                        chunks_created++;
+                    }
+
+                    printf(
+                        "[CHUNKING] Created small-device chunk with %d devices "
+                        "(%d lines, %zu bytes)\n",
+                        devices_in_chunk, current_lines, bytes_written);
+
+                    // Reset counters and buffer
+                    buffer_ptr = reusable_buffer;
+                    bytes_written = 0;
+                    current_lines = 0;
+                    devices_in_chunk = 0;
+                }
+            }
+
+            // Add device data to current chunk
+            for (int j = 0; j < line_count; j++) {
+                if (device_lines[j] >= file_start &&
+                    device_lines[j] < file_end) {
+                    const char *line_end = memchr(device_lines[j], '\n',
+                                                  file_end - device_lines[j]);
+                    if (!line_end) line_end = file_end;
+
+                    size_t line_len = line_end - device_lines[j];
+
+                    // Check if we need a larger buffer
+                    if (bytes_written + line_len + 2 >= BUFFER_SIZE) {
+                        // Create chunk from current buffer
+                        char *chunk_data = malloc(bytes_written + 1);
+                        if (chunk_data) {
+                            memcpy(chunk_data, reusable_buffer, bytes_written);
+                            chunk_data[bytes_written] = '\0';
+                            thread_safe_queue_enqueue(queue, chunk_data,
+                                                      bytes_written,
+                                                      csv->header, header_len);
+                            chunks_created++;
+
+                            printf(
+                                "[CHUNKING] Created partial small-device chunk "
+                                "with %zu bytes\n",
+                                bytes_written);
+                        }
+
+                        // Reset buffer
+                        buffer_ptr = reusable_buffer;
+                        bytes_written = 0;
+                    }
+
+                    // Copy line to buffer
+                    memcpy(buffer_ptr, device_lines[j], line_len);
+                    buffer_ptr += line_len;
+                    bytes_written += line_len;
+
+                    // Add newline if needed
+                    if (*(buffer_ptr - 1) != '\n') {
+                        *buffer_ptr++ = '\n';
+                        bytes_written++;
+                    }
+                }
+            }
+
+            current_lines += line_count;
+            devices_in_chunk++;
+        }
+
+        // Create final chunk if any data remains
+        if (bytes_written > 0) {
+            char *chunk_data = malloc(bytes_written + 1);
+            if (chunk_data) {
+                memcpy(chunk_data, reusable_buffer, bytes_written);
+                chunk_data[bytes_written] = '\0';
+                thread_safe_queue_enqueue(queue, chunk_data, bytes_written,
+                                          csv->header, header_len);
+                chunks_created++;
+
+                printf(
+                    "[CHUNKING] Created final small-device chunk with %d "
+                    "devices (%d lines, %zu bytes)\n",
+                    devices_in_chunk, current_lines, bytes_written);
+            }
+        }
+    }
+
+    // Cleanup
+    free(reusable_buffer);
+    free(small_devices);
+    free(large_devices);
+
+    // We've used all the device_ids, but we should free the array itself
+    for (int i = 0; i < device_count; i++) {
+        free(device_ids[i]);
+    }
+    free(device_ids);
+
+    gettimeofday(&end_time, NULL);
+    elapsed_ms = (end_time.tv_sec - start_time.tv_sec) * 1000.0;
+    elapsed_ms += (end_time.tv_usec - start_time.tv_usec) / 1000.0;
+
+    printf(
+        "[CHUNKING] Created %d total chunks (optimized from %d devices) in "
+        "%.2f seconds\n",
+        chunks_created, device_count, elapsed_ms / 1000.0);
 
     return chunks_created;
 }

@@ -302,11 +302,13 @@ int main(int argc, char *argv[]) {
     }
 
     // Particionar por dispositivo em vez de linhas
-    printf("[MAIN] Partitioning CSV by device\n");
+    printf("[MAIN] Partitioning CSV by device using smart binning\n");
     start_timer(&partitioning_timer, "CSV partitioning by device");
-    size_t num_chunks = partition_csv_by_device(&deviceMappedCsv, queue);
+    // Use the optimized partitioning function that groups small devices
+    size_t num_chunks =
+        partition_csv_by_device_optimized(&deviceMappedCsv, queue);
     stop_timer(&partitioning_timer);
-    printf("[MAIN] Número de dispositivos particionados: %zu\n", num_chunks);
+    printf("[MAIN] Número de chunks particionados: %zu\n", num_chunks);
 
     if (num_chunks == 0) {
         fprintf(stderr, "[MAIN] Falha ao particionar o CSV por dispositivos\n");

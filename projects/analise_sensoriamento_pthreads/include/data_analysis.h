@@ -39,6 +39,17 @@ int partition_csv(const MappedCSV *csv, size_t chunk_size,
 int partition_csv_by_device(const DeviceMappedCSV *csv, ThreadSafeQueue *queue);
 
 /**
+ * Particiona o arquivo CSV por dispositivo com agrupamento inteligente.
+ * Dispositivos pequenos são agrupados para reduzir overhead de processamento.
+ * @param csv Estrutura DeviceMappedCSV representando o arquivo CSV mapeado com
+ * tabela de dispositivos.
+ * @param queue Fila de espera para armazenar os pedaços.
+ * @return Número de pedaços criados.
+ */
+int partition_csv_by_device_optimized(const DeviceMappedCSV *csv,
+                                      ThreadSafeQueue *queue);
+
+/**
  * Gera um caminho UDS único para um dado ID de fatia.
  * @param slice_id O ID da fatia.
  * @param uds_info Ponteiro para a struct UDSInfo a ser preenchida.
