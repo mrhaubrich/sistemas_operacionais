@@ -50,7 +50,10 @@ void *worker_func(void *arg) {
     ThreadSafeQueue *queue = wargs->queue;
     const char *script_path = wargs->script_path;
 
+// Only log worker start at debug level
+#ifdef DEBUG
     printf("[WORKER-%d] Worker thread started\n", id);
+#endif
 
     int total_lines = 0;
     char *final_result = NULL;
@@ -70,13 +73,17 @@ void *worker_func(void *arg) {
         int dq = thread_safe_queue_dequeue(queue, &slice, &slice_len, &header,
                                            &header_len);
         if (dq != 0) {
-            // Queue is empty
+// Queue is empty
+#ifdef DEBUG
             printf("[WORKER-%d] Queue is empty, exiting worker loop\n", id);
+#endif
             break;
         }
 
+#ifdef DEBUG
         printf("[WORKER-%d] Dequeued chunk #%d: slice_len=%zu\n", id,
                chunks_processed + 1, slice_len);
+#endif
 
         start_timer(&chunk_timer, "Python chunk processing");
 
@@ -84,28 +91,34 @@ void *worker_func(void *arg) {
         generate_uds_path(id, &uds_info);
         int server_fd = establish_uds_server(&uds_info);
         if (server_fd < 0) {
+#ifdef DEBUG
             printf(
                 "[WORKER-%d] Failed to establish UDS server, freeing slice "
                 "memory %p\n",
                 id, slice);
+#endif
             free((void *)slice);
             total_memory_freed += slice_len;
             continue;
         }
         pid_t pid = launch_python_process(&uds_info, script_path);
         if (pid < 0) {
+#ifdef DEBUG
             printf(
                 "[WORKER-%d] Failed to launch Python process, freeing slice "
                 "memory %p\n",
                 id, slice);
+#endif
             free((void *)slice);
             total_memory_freed += slice_len;
             cleanup_uds(&uds_info);
             continue;
         }
 
+#ifdef DEBUG
         printf("[WORKER-%d] Processing chunk #%d with Python process %d\n", id,
                chunks_processed + 1, pid);
+#endif
 
         // Send the chunk to the Python process
         // We need to create a temporary queue for this chunk
@@ -125,8 +138,11 @@ void *worker_func(void *arg) {
             for (int j = 0; j < received; ++j)
                 if (buffer[j] == '\n') lines++;
             total_lines += lines;
+
+#ifdef DEBUG
             printf("[WORKER-%d] Received %d bytes, %d lines from Python\n", id,
                    received, lines);
+#endif
 
             // Concatenate results if needed
             char *new_result =
@@ -136,14 +152,21 @@ void *worker_func(void *arg) {
                 final_result = new_result;
                 final_result_size += received;
             }
-        } else {
+        }
+#ifdef DEBUG
+        else {
             printf("[WORKER-%d] No data received from Python process\n", id);
         }
+#endif
+
         if (buffer) free(buffer);
 
-        // Free the device data chunk after processing
+// Free the device data chunk after processing
+#ifdef DEBUG
         printf("[WORKER-%d] Freeing slice memory %p of size %zu\n", id, slice,
                slice_len);
+#endif
+
         free((void *)slice);
         total_memory_freed += slice_len;
         chunks_processed++;
@@ -155,11 +178,13 @@ void *worker_func(void *arg) {
         total_processing_time += chunk_timer.elapsed_ms;
     }
 
+#ifdef DEBUG
     printf(
         "[WORKER-%d] Worker finished. Processed %d chunks, freed %zu bytes, "
         "collected %d lines. Total processing time: %.2f ms\n",
         id, chunks_processed, total_memory_freed, total_lines,
         total_processing_time);
+#endif
 
     wargs->line_counts[id] = total_lines;
     wargs->results[id] = final_result;
