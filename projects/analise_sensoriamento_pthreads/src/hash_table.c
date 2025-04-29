@@ -240,6 +240,9 @@ const char **device_hash_table_get_lines(DeviceHashTable *table,
     while (entry) {
         if (strcmp(entry->device_id, device_id) == 0) {
             *line_count_ptr = entry->line_count;
+            // Debug info for line count to help diagnose issues
+            printf("[DEBUG] Found device %s with %d lines at %p\n", device_id,
+                   entry->line_count, (void *)entry->lines);
             return entry->lines;
         }
         entry = entry->next;

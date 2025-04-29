@@ -65,71 +65,264 @@ int partition_csv_by_device(const DeviceMappedCSV *csv,
                             ThreadSafeQueue *queue) {
     if (!csv || !queue || !csv->device_table) return 0;
 
+    printf("[DEBUG] Starting partition_csv_by_device\n");
+
     // Obter todos os dispositivos únicos
     int device_count = 0;
     char **device_ids =
         device_hash_table_get_all_devices(csv->device_table, &device_count);
 
     if (!device_ids || device_count == 0) {
+        printf("[ERROR] Failed to get device IDs or no devices found\n");
         return 0;
     }
 
+    printf("[DEBUG] Got %d unique devices\n", device_count);
     size_t header_len = strlen(csv->header);
     int chunks_created = 0;
+    size_t total_memory_allocated = 0;
 
-    // Para cada dispositivo, criar um chunk com todas as suas linhas
-    for (int i = 0; i < device_count; i++) {
-        int line_count = 0;
-        const char **device_lines = device_hash_table_get_lines(
-            csv->device_table, device_ids[i], &line_count);
+    const char *file_start = csv->mapped_data;
+    const char *file_end = file_start + csv->size;
 
-        if (!device_lines || line_count == 0) {
-            continue;
-        }
+    // Processa os dispositivos em lotes para limitar o uso de memória
+    const int DEVICES_PER_BATCH = 100;
 
-        // Calcular o tamanho total das linhas deste dispositivo
-        size_t total_device_data_len = 0;
-        for (int j = 0; j < line_count; j++) {
-            total_device_data_len += strlen(device_lines[j]);
-            // Adiciona espaço para caracteres de nova linha
-            if (j < line_count - 1 || strchr(device_lines[j], '\n') == NULL) {
-                total_device_data_len += 1;
+    for (int batch_start = 0; batch_start < device_count;
+         batch_start += DEVICES_PER_BATCH) {
+        int batch_end = batch_start + DEVICES_PER_BATCH;
+        if (batch_end > device_count) batch_end = device_count;
+
+        printf("[DEBUG] Processing device batch %d to %d (of %d)\n",
+               batch_start, batch_end - 1, device_count);
+
+        // Para cada dispositivo no batch atual, criar um chunk com todas as
+        // suas linhas
+        for (int i = batch_start; i < batch_end; i++) {
+            int line_count = 0;
+            const char **device_lines = device_hash_table_get_lines(
+                csv->device_table, device_ids[i], &line_count);
+
+            if (!device_lines || line_count == 0) {
+                printf("[DEBUG] Device %d (%s) has no lines, skipping\n", i,
+                       device_ids[i]);
+                continue;
             }
-        }
 
-        // Alocar buffer para todas as linhas deste dispositivo
-        char *device_data = malloc(total_device_data_len + 1);
-        if (!device_data) {
-            fprintf(stderr,
+            // Se é um dispositivo com várias linhas, processa de forma
+            // diferente
+            if (line_count > 100) {
+                printf(
+                    "[DEBUG] Device %d (%s) has %d lines, processing in "
+                    "chunks\n",
+                    i, device_ids[i], line_count);
+
+                // Processa em batches para evitar alocações muito grandes
+                const int LINES_PER_BATCH = 100;
+                int batches =
+                    (line_count + LINES_PER_BATCH - 1) / LINES_PER_BATCH;
+
+                for (int batch = 0; batch < batches; batch++) {
+                    int start_line = batch * LINES_PER_BATCH;
+                    int end_line = start_line + LINES_PER_BATCH;
+                    if (end_line > line_count) end_line = line_count;
+
+                    size_t batch_size = 0;
+                    // Primeiro passo: calcular o tamanho necessário para este
+                    // batch
+                    for (int j = start_line; j < end_line; j++) {
+                        if (device_lines[j] >= file_start &&
+                            device_lines[j] < file_end) {
+                            const char *line_end =
+                                strchr(device_lines[j], '\n');
+                            if (!line_end || line_end > file_end)
+                                line_end = file_end;
+                            batch_size +=
+                                (line_end - device_lines[j]) + 1;  // +1 para \n
+                        }
+                    }
+
+                    if (batch_size == 0) continue;
+
+                    // Aloca memória para o batch
+                    char *batch_data = malloc(batch_size + 1);  // +1 para \0
+                    if (!batch_data) {
+                        fprintf(stderr,
+                                "Falha ao alocar memória para batch do "
+                                "dispositivo %s\n",
+                                device_ids[i]);
+                        continue;
+                    }
+
+                    // Preenche o batch
+                    char *ptr = batch_data;
+                    for (int j = start_line; j < end_line; j++) {
+                        if (device_lines[j] >= file_start &&
+                            device_lines[j] < file_end) {
+                            const char *line_end =
+                                strchr(device_lines[j], '\n');
+                            if (!line_end || line_end > file_end)
+                                line_end = file_end;
+
+                            size_t line_len = line_end - device_lines[j];
+                            if (line_len > 0) {
+                                memcpy(ptr, device_lines[j], line_len);
+                                ptr += line_len;
+
+                                // Adiciona quebra de linha se necessário
+                                if (j < end_line - 1 ||
+                                    (line_len > 0 && *(ptr - 1) != '\n')) {
+                                    *ptr++ = '\n';
+                                }
+                            }
+                        }
+                    }
+
+                    *ptr = '\0';
+                    size_t actual_size = ptr - batch_data;
+
+                    printf(
+                        "[DEBUG] Enqueuing device %s batch %d/%d with size %zu "
+                        "bytes\n",
+                        device_ids[i], batch + 1, batches, actual_size);
+
+                    thread_safe_queue_enqueue(queue, batch_data, actual_size,
+                                              csv->header, header_len);
+                    chunks_created++;
+                    total_memory_allocated += actual_size + 1;
+                }
+
+                continue;
+            }
+
+            // Calcular o tamanho total das linhas deste dispositivo com
+            // segurança
+            size_t total_device_data_len = 0;
+
+            // Primeiro passo: calcular o tamanho total de dados necessários
+            // sem fazer nenhuma alocação ainda
+            for (int j = 0; j < line_count; j++) {
+                // Verificar se o ponteiro da linha está na região de memória
+                // mapeada
+                if (device_lines[j] >= file_start &&
+                    device_lines[j] < file_end) {
+                    // Encontrar o fim desta linha (newline ou fim do arquivo)
+                    const char *line_end = strchr(device_lines[j], '\n');
+                    if (!line_end || line_end > file_end) {
+                        line_end = file_end;  // Se não encontrar \n, vai até o
+                                              // fim do arquivo
+                    }
+
+                    // Calcular comprimento seguro da linha
+                    size_t line_len = line_end - device_lines[j];
+                    total_device_data_len += line_len;
+
+                    // Adicionar espaço para \n se necessário
+                    if (line_end < file_end && *line_end != '\n') {
+                        total_device_data_len += 1;
+                    }
+                }
+            }
+
+            printf(
+                "[DEBUG] Device %d (%s): %d lines, safely calculated %zu "
+                "bytes\n",
+                i, device_ids[i], line_count, total_device_data_len);
+
+            // Se não há dados válidos para este dispositivo, pule-o
+            if (total_device_data_len == 0) {
+                printf("[DEBUG] Device %s has no valid data, skipping\n",
+                       device_ids[i]);
+                continue;
+            }
+
+            // Aloca buffer para todas as linhas deste dispositivo
+            char *device_data =
+                malloc(total_device_data_len + 1);  // +1 para \0
+            if (!device_data) {
+                fprintf(
+                    stderr,
                     "Falha ao alocar memória para dados do dispositivo %s\n",
                     device_ids[i]);
-            continue;
-        }
+                continue;
+            }
 
-        // Concatenar todas as linhas deste dispositivo
-        char *ptr = device_data;
-        for (int j = 0; j < line_count; j++) {
-            size_t line_len = strlen(device_lines[j]);
-            memcpy(ptr, device_lines[j], line_len);
-            ptr += line_len;
+            total_memory_allocated += total_device_data_len + 1;
+            printf(
+                "[DEBUG] Allocated %zu bytes for device %s (total so far: %zu "
+                "bytes)\n",
+                total_device_data_len + 1, device_ids[i],
+                total_memory_allocated);
 
-            // Adiciona quebra de linha se não existir
-            if (j < line_count - 1 ||
-                (*(ptr - 1) != '\n' && *(ptr - 1) != '\r')) {
-                *ptr++ = '\n';
+            // Concatena as linhas deste dispositivo com verificações de
+            // segurança
+            char *ptr = device_data;
+            size_t remaining = total_device_data_len;
+
+            for (int j = 0; j < line_count && remaining > 0; j++) {
+                if (device_lines[j] >= file_start &&
+                    device_lines[j] < file_end) {
+                    const char *line_end = strchr(device_lines[j], '\n');
+                    if (!line_end || line_end > file_end) {
+                        line_end = file_end;
+                    }
+
+                    // Calcular comprimento seguro da linha
+                    size_t line_len = line_end - device_lines[j];
+
+                    // Verificar se temos espaço suficiente
+                    if (line_len > remaining) {
+                        printf(
+                            "[WARNING] Not enough space for line %d of device "
+                            "%s. "
+                            "Truncating data.\n",
+                            j, device_ids[i]);
+                        line_len = remaining;
+                    }
+
+                    // Copiar a linha
+                    if (line_len > 0) {
+                        memcpy(ptr, device_lines[j], line_len);
+                        ptr += line_len;
+                        remaining -= line_len;
+                    }
+
+                    // Adicionar quebra de linha se necessário
+                    if ((j < line_count - 1) && remaining > 0) {
+                        *ptr++ = '\n';
+                        remaining--;
+                    }
+                }
+            }
+
+            *ptr = '\0';  // Terminador nulo sempre é colocado
+
+            // Enfileira as linhas deste dispositivo como um único chunk
+            size_t actual_size = ptr - device_data;
+            printf("[DEBUG] Enqueuing device %s with actual size %zu bytes\n",
+                   device_ids[i], actual_size);
+
+            thread_safe_queue_enqueue(queue, device_data, actual_size,
+                                      csv->header, header_len);
+            chunks_created++;
+
+            if (chunks_created % 1000 == 0) {
+                printf("[DEBUG] Enqueued %d device chunks\n", chunks_created);
             }
         }
-        *ptr = '\0';
 
-        // Enfileira as linhas deste dispositivo como um único chunk
-        thread_safe_queue_enqueue(queue, device_data, ptr - device_data,
-                                  csv->header, header_len);
-        chunks_created++;
-
-        // device_data será liberado pelo receptor após o uso
+        // Log após cada batch para monitorar o progresso
+        printf(
+            "[DEBUG] Completed batch %d to %d: %d chunks created so far, %zu "
+            "bytes allocated\n",
+            batch_start, batch_end - 1, chunks_created, total_memory_allocated);
     }
 
+    printf("[DEBUG] Created %d total chunks, allocated %zu bytes in total\n",
+           chunks_created, total_memory_allocated);
+
     // Libera a lista de IDs de dispositivos
+    printf("[DEBUG] Cleaning up device IDs\n");
     for (int i = 0; i < device_count; i++) {
         free(device_ids[i]);
     }
@@ -192,40 +385,66 @@ int establish_uds_server(const UDSInfo *uds_info) {
 // Envia um pedaço de CSV por uma conexão UDS.
 int send_csv_chunk(const UDSInfo *uds_info, const ThreadSafeQueue *queue) {
     if (!uds_info || !queue) return -1;
+
+    printf("[SEND_CHUNK] Waiting for client connection on %s\n",
+           uds_info->uds_path);
     int client_fd = accept(uds_info->socket_fd, NULL, NULL);
     if (client_fd < 0) {
         perror("[C] accept");
         return -1;
     }
+    printf("[SEND_CHUNK] Client connected, preparing to send data\n");
 
     size_t count = thread_safe_queue_get_count((ThreadSafeQueue *)queue);
+    printf("[SEND_CHUNK] Queue has %zu items to send\n", count);
+
     for (size_t i = 0; i < count; ++i) {
         const char *slice;
         size_t slice_len;
         const char *header;
         size_t header_len;
         if (thread_safe_queue_dequeue((ThreadSafeQueue *)queue, &slice,
-                                      &slice_len, &header, &header_len) != 0)
+                                      &slice_len, &header, &header_len) != 0) {
+            printf("[SEND_CHUNK] Failed to dequeue item %zu\n", i);
             continue;
+        }
+
+        printf(
+            "[SEND_CHUNK] Dequeued item %zu: header_len=%zu, slice_len=%zu, "
+            "slice=%p\n",
+            i, header_len, slice_len, slice);
 
         // Envia header + '\n' + dados do chunk
         ssize_t sent = send(client_fd, header, header_len, 0);
         if (sent < 0) {
+            perror("[SEND_CHUNK] Failed to send header");
             close(client_fd);
             return -1;
         }
+        printf("[SEND_CHUNK] Sent header: %zd bytes\n", sent);
+
         sent = send(client_fd, "\n", 1, 0);
         if (sent < 0) {
+            perror("[SEND_CHUNK] Failed to send newline");
             close(client_fd);
             return -1;
         }
+
         sent = send(client_fd, slice, slice_len, 0);
         if (sent < 0) {
             perror("[C] send slice");
             close(client_fd);
             return -1;
         }
+        printf("[SEND_CHUNK] Sent slice: %zd bytes\n", sent);
+
+        // NOTE: In this function we don't free the slice because:
+        // 1. For the main queue, it's pointing to memory-mapped file data
+        // 2. For single_queue in worker_func, the slice is freed after this
+        // function returns
     }
+
+    printf("[SEND_CHUNK] All chunks sent, closing connection\n");
     close(client_fd);
     return 0;
 }

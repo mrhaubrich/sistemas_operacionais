@@ -16,6 +16,8 @@ ThreadSafeQueue *thread_safe_queue_create(void) {
         free(q);
         return NULL;
     }
+
+    printf("[QUEUE] Created new queue %p\n", (void *)q);
     return q;
 }
 
@@ -43,6 +45,9 @@ int thread_safe_queue_enqueue(ThreadSafeQueue *q, const char *slice,
         q->tail = node;
     }
     q->count++;
+    printf(
+        "[QUEUE-%p] Enqueued node %p with slice %p (len=%zu), new count: %zu\n",
+        (void *)q, (void *)node, slice, slice_len, q->count);
     pthread_mutex_unlock(&q->mutex);
 
     return 0;
@@ -66,6 +71,10 @@ int thread_safe_queue_dequeue(ThreadSafeQueue *q, const char **slice,
     q->head = node->next;
     if (q->head == NULL) q->tail = NULL;
     q->count--;
+    printf(
+        "[QUEUE-%p] Dequeued node %p with slice %p (len=%zu), remaining count: "
+        "%zu\n",
+        (void *)q, (void *)node, *slice, *slice_len, q->count);
     pthread_mutex_unlock(&q->mutex);
 
     free(node);
@@ -94,10 +103,18 @@ size_t thread_safe_queue_get_count(ThreadSafeQueue *q) {
 void thread_safe_queue_destroy(ThreadSafeQueue *q) {
     if (!q) return;
 
+    printf("[QUEUE] Destroying queue %p\n", (void *)q);
+
     ThreadSafeQueueNode *node = q->head;
     while (node) {
         ThreadSafeQueueNode *temp = node;
         node = node->next;
+        // Note: We're NOT freeing temp->slice here, as it should be
+        // freed by the consumer of the queue data
+        printf(
+            "[QUEUE-%p] Freeing node %p during destruction (not freeing slice "
+            "%p)\n",
+            (void *)q, (void *)temp, temp->slice);
         free(temp);
     }
     pthread_mutex_destroy(&q->mutex);

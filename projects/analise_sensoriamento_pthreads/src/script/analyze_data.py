@@ -54,10 +54,32 @@ def analyze_csv_data(csv_data):
     drop_cols = [col for col in ["id", "latitude", "longitude"] if col in df.columns]
     df = df.drop(drop_cols).drop_nulls()
     if "device" not in df.columns:
-        raise ValueError("O DataFrame não contém a coluna 'device'.")
+        print("Aviso: O DataFrame não contém a coluna 'device'.")
+        # Return empty result instead of raising an error
+        return pl.DataFrame(
+            schema={
+                "device": str,
+                "ano-mes": str,
+                "sensor": str,
+                "valor_maximo": float,
+                "valor_medio": float,
+                "valor_minimo": float,
+            }
+        )
     df = df.filter(df["device"].is_not_null())
     if df.is_empty():
-        raise ValueError("O DataFrame está vazio após a normalização.")
+        print("Aviso: O DataFrame está vazio após a normalização.")
+        # Return empty result instead of raising an error
+        return pl.DataFrame(
+            schema={
+                "device": str,
+                "ano-mes": str,
+                "sensor": str,
+                "valor_maximo": float,
+                "valor_medio": float,
+                "valor_minimo": float,
+            }
+        )
     # Date conversion and ano-mes
     df = df.with_columns(
         [
