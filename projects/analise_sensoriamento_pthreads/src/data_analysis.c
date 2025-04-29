@@ -40,6 +40,87 @@ int partition_csv(const MappedCSV *csv, size_t chunk_size,
     return chunk_count;
 }
 
+/**
+ * Particiona o arquivo CSV por dispositivo.
+ * Cada dispositivo se torna um chunk separado na fila.
+ */
+int partition_csv_by_device(const DeviceMappedCSV *csv,
+                            ThreadSafeQueue *queue) {
+    if (!csv || !queue || !csv->device_table) return 0;
+
+    // Obter todos os dispositivos únicos
+    int device_count = 0;
+    char **device_ids =
+        device_hash_table_get_all_devices(csv->device_table, &device_count);
+
+    if (!device_ids || device_count == 0) {
+        return 0;
+    }
+
+    size_t header_len = strlen(csv->header);
+    int chunks_created = 0;
+
+    // Para cada dispositivo, criar um chunk com todas as suas linhas
+    for (int i = 0; i < device_count; i++) {
+        int line_count = 0;
+        const char **device_lines = device_hash_table_get_lines(
+            csv->device_table, device_ids[i], &line_count);
+
+        if (!device_lines || line_count == 0) {
+            continue;
+        }
+
+        // Calcular o tamanho total das linhas deste dispositivo
+        size_t total_device_data_len = 0;
+        for (int j = 0; j < line_count; j++) {
+            total_device_data_len += strlen(device_lines[j]);
+            // Adiciona espaço para caracteres de nova linha
+            if (j < line_count - 1 || strchr(device_lines[j], '\n') == NULL) {
+                total_device_data_len += 1;
+            }
+        }
+
+        // Alocar buffer para todas as linhas deste dispositivo
+        char *device_data = malloc(total_device_data_len + 1);
+        if (!device_data) {
+            fprintf(stderr,
+                    "Falha ao alocar memória para dados do dispositivo %s\n",
+                    device_ids[i]);
+            continue;
+        }
+
+        // Concatenar todas as linhas deste dispositivo
+        char *ptr = device_data;
+        for (int j = 0; j < line_count; j++) {
+            size_t line_len = strlen(device_lines[j]);
+            memcpy(ptr, device_lines[j], line_len);
+            ptr += line_len;
+
+            // Adiciona quebra de linha se não existir
+            if (j < line_count - 1 ||
+                (*(ptr - 1) != '\n' && *(ptr - 1) != '\r')) {
+                *ptr++ = '\n';
+            }
+        }
+        *ptr = '\0';
+
+        // Enfileira as linhas deste dispositivo como um único chunk
+        thread_safe_queue_enqueue(queue, device_data, ptr - device_data,
+                                  csv->header, header_len);
+        chunks_created++;
+
+        // device_data será liberado pelo receptor após o uso
+    }
+
+    // Libera a lista de IDs de dispositivos
+    for (int i = 0; i < device_count; i++) {
+        free(device_ids[i]);
+    }
+    free(device_ids);
+
+    return chunks_created;
+}
+
 // Gera um caminho UDS único para um dado ID de fatia.
 void generate_uds_path(int slice_id, UDSInfo *uds_info) {
     if (!uds_info) return;

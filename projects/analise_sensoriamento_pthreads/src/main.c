@@ -7,6 +7,7 @@
 
 #include "../include/data_analysis.h"
 #include "../include/file_mapping.h"
+#include "../include/hash_table.h"
 #include "../include/thread_safe_queue.h"
 #include "../include/utils.h"
 
@@ -95,6 +96,44 @@ void *worker_func(void *arg) {
 }
 
 /**
+ * Encontra o índice da coluna de dispositivo no cabeçalho CSV
+ * @param header O cabeçalho CSV
+ * @param device_column_name O nome da coluna a ser buscada
+ * @return O índice da coluna ou -1 se não for encontrada
+ */
+int find_device_column(const char *header, const char *device_column_name) {
+    if (!header || !device_column_name) return -1;
+
+    // Por padrão, usamos '|' como delimitador CSV
+    const char *p = header;
+    int column_index = 0;
+
+    // Tokenize o cabeçalho
+    char *header_copy = strdup(header);
+    if (!header_copy) return -1;
+
+    char *token = strtok(header_copy, "|");
+    while (token) {
+        // Remove espaços extras
+        while (*token == ' ' && *token) token++;
+        char *end = token + strlen(token) - 1;
+        while (end > token && *end == ' ') *end-- = '\0';
+
+        // Compara o nome da coluna
+        if (strcmp(token, device_column_name) == 0) {
+            free(header_copy);
+            return column_index;
+        }
+
+        token = strtok(NULL, "|");
+        column_index++;
+    }
+
+    free(header_copy);
+    return -1;  // Coluna não encontrada
+}
+
+/**
  * Ponto de entrada principal para o programa de processamento de arquivos CSV
  */
 int main(int argc, char *argv[]) {
@@ -104,11 +143,18 @@ int main(int argc, char *argv[]) {
     printf("----------------------------------------------------------\n");
 
     // Validar argumentos da linha de comando
-    if (!validate_args(argc, argv)) {
+    if (argc < 2) {
+        fprintf(stderr,
+                "Uso: %s <caminho_para_arquivo_csv> [coluna_dispositivo]\n",
+                argv[0]);
+        fprintf(stderr,
+                "     coluna_dispositivo: Nome da coluna que contém o ID do "
+                "dispositivo (padrão: 'device')\n");
         return EXIT_FAILURE;
     }
 
     const char *filepath = argv[1];
+    const char *device_column_name = (argc > 2) ? argv[2] : "device";
 
     // Validar extensão do arquivo
     if (!validate_csv_extension(filepath)) {
@@ -118,54 +164,84 @@ int main(int argc, char *argv[]) {
     // Imprimir informações do sistema
     int num_processors = get_available_number_of_processors();
     printf("Processadores disponíveis: %d\n", num_processors);
-    printf("Processando arquivo: %s\n\n", filepath);
+    printf("Processando arquivo: %s\n", filepath);
+    printf("Coluna de dispositivo: %s\n\n", device_column_name);
 
-    // Mapear arquivo na memória
-    MappedCSV mappedCsv = map_csv(filepath);
-    if (mappedCsv.header == NULL) {
+    // Primeira etapa: mapear o arquivo para obter o cabeçalho e encontrar o
+    // índice da coluna de dispositivo
+    MappedCSV temp_csv = map_csv(filepath);
+    if (temp_csv.header == NULL) {
         fprintf(stderr, "Falha ao mapear o arquivo\n");
         return EXIT_FAILURE;
     }
 
-    // Imprimir informações do arquivo
-    print_csv_info(&mappedCsv);
-
-    // --- NOVA LÓGICA USANDO PTHREADS PARA PROCESSAMENTO PARALELO COM PYTHON
-    // ---
-
-    size_t n_cpus = num_processors;
-    ThreadSafeQueue *queue = thread_safe_queue_create();
-    if (!queue) {
-        fprintf(stderr, "Falha ao criar fila de chunks\n");
-        unmap_csv(&mappedCsv);
+    // Encontrar o índice da coluna de dispositivo
+    int device_column = find_device_column(temp_csv.header, device_column_name);
+    if (device_column < 0) {
+        fprintf(stderr, "Erro: Coluna '%s' não encontrada no cabeçalho\n",
+                device_column_name);
+        unmap_csv(&temp_csv);
         return EXIT_FAILURE;
     }
 
-    int calculated_size =
-        mappedCsv.data_count / n_cpus + (mappedCsv.data_count % n_cpus != 0);
-    int chunk_size = (calculated_size < 100000) ? calculated_size : 100000;
+    printf("Índice da coluna de dispositivo '%s': %d\n", device_column_name,
+           device_column);
 
-    printf("Tamanho do chunk: %d\n", chunk_size);
+    // Liberar o CSV temporário
+    unmap_csv(&temp_csv);
 
-    size_t num_chunks = partition_csv(&mappedCsv, chunk_size, queue);
-    printf("Número de chunks particionados: %zu\n", num_chunks);
+    // Mapear novamente usando a abordagem baseada em dispositivo
+    DeviceMappedCSV deviceMappedCsv = map_device_csv(filepath, device_column);
+    if (deviceMappedCsv.header == NULL || !deviceMappedCsv.device_table) {
+        fprintf(stderr,
+                "Falha ao mapear o arquivo utilizando tabela hash de "
+                "dispositivos\n");
+        return EXIT_FAILURE;
+    }
+
+    // Imprimir informações do arquivo
+    printf("\nInformações do CSV:\n");
+    printf("- Linhas: %d\n", deviceMappedCsv.data_count);
+    printf("- Cabeçalho: %s\n", deviceMappedCsv.header);
+    printf("- Dispositivos únicos: %d\n",
+           deviceMappedCsv.device_table->device_count);
+
+    // --- NOVA LÓGICA USANDO PTHREADS PARA PROCESSAMENTO PARALELO COM PYTHON
+    // POR DISPOSITIVO ---
+
+    ThreadSafeQueue *queue = thread_safe_queue_create();
+    if (!queue) {
+        fprintf(stderr, "Falha ao criar fila de chunks\n");
+        unmap_device_csv(&deviceMappedCsv);
+        return EXIT_FAILURE;
+    }
+
+    // Particionar por dispositivo em vez de linhas
+    size_t num_chunks = partition_csv_by_device(&deviceMappedCsv, queue);
+    printf("Número de dispositivos particionados: %zu\n", num_chunks);
 
     if (num_chunks == 0) {
-        fprintf(stderr, "Falha ao particionar o CSV\n");
+        fprintf(stderr, "Falha ao particionar o CSV por dispositivos\n");
         thread_safe_queue_destroy(queue);
-        unmap_csv(&mappedCsv);
+        unmap_device_csv(&deviceMappedCsv);
         return EXIT_FAILURE;
     }
 
     // Caminho para o script Python
     const char *script_path = "./src/script/analyze_data.py";
 
+    // Determinar número de threads para usar (mínimo entre num_processors e
+    // num_chunks)
+    size_t n_threads =
+        (num_processors < num_chunks) ? num_processors : num_chunks;
+
     // Cria threads e argumentos
-    pthread_t *threads = malloc(sizeof(pthread_t) * num_chunks);
-    WorkerArgs *args = malloc(sizeof(WorkerArgs) * num_chunks);
-    int *line_counts = calloc(num_chunks, sizeof(int));
-    char **results = calloc(num_chunks, sizeof(char *));
-    size_t *result_sizes = calloc(num_chunks, sizeof(size_t));
+    pthread_t *threads = malloc(sizeof(pthread_t) * n_threads);
+    WorkerArgs *args = malloc(sizeof(WorkerArgs) * n_threads);
+    int *line_counts = calloc(n_threads, sizeof(int));
+    char **results = calloc(n_threads, sizeof(char *));
+    size_t *result_sizes = calloc(n_threads, sizeof(size_t));
+
     if (!threads || !args || !line_counts || !results || !result_sizes) {
         fprintf(stderr, "Falha ao alocar recursos de threads\n");
         if (threads) free(threads);
@@ -174,11 +250,14 @@ int main(int argc, char *argv[]) {
         if (results) free(results);
         if (result_sizes) free(result_sizes);
         thread_safe_queue_destroy(queue);
-        unmap_csv(&mappedCsv);
+        unmap_device_csv(&deviceMappedCsv);
         return EXIT_FAILURE;
     }
 
-    for (size_t i = 0; i < n_cpus; ++i) {
+    printf("Iniciando %zu threads para processar %zu dispositivos...\n",
+           n_threads, num_chunks);
+
+    for (size_t i = 0; i < n_threads; ++i) {
         args[i].thread_id = (int)i;
         args[i].queue = queue;
         args[i].script_path = script_path;
@@ -189,13 +268,13 @@ int main(int argc, char *argv[]) {
     }
 
     // Aguarda todas as threads terminarem
-    for (size_t i = 0; i < n_cpus; ++i) {
+    for (size_t i = 0; i < n_threads; ++i) {
         pthread_join(threads[i], NULL);
     }
 
     // Soma total de linhas retornadas
     int total_lines = 0;
-    for (size_t i = 0; i < num_chunks; ++i) {
+    for (size_t i = 0; i < n_threads; ++i) {
         total_lines += line_counts[i];
     }
 
@@ -204,11 +283,11 @@ int main(int argc, char *argv[]) {
     free(args);
     free(line_counts);
     thread_safe_queue_destroy(queue);
-    unmap_csv(&mappedCsv);
+    unmap_device_csv(&deviceMappedCsv);
 
     // Print first 10 lines of all returned CSVs
     printf("\nPrimeiras 10 linhas retornadas por todos os CSVs processados:\n");
-    for (size_t i = 0; i < n_cpus; ++i) {
+    for (size_t i = 0; i < n_threads; ++i) {
         printf("Thread %zu: %d linhas\n", i, line_counts[i]);
         if (results[i] && result_sizes[i] > 0) {
             int line = 0;
@@ -233,8 +312,6 @@ int main(int argc, char *argv[]) {
 
     printf("\nTotal de linhas retornadas por todos os CSVs processados: %d\n",
            total_lines);
-
-    // TODO: Aqui vamos ter que mergar os resultados
 
     // Limpeza final dos resultados
     for (size_t i = 0; i < num_chunks; ++i) {
