@@ -20,6 +20,19 @@ typedef struct {
 
 // Protótipos de funções
 /**
+ * Particiona o arquivo CSV por dispositivo, otimizando para o número de
+ * threads. Os dispositivos são distribuídos entre as threads para balancear o
+ * trabalho, mantendo os dados de um mesmo dispositivo juntos.
+ * @param csv Estrutura DeviceMappedCSV representando o arquivo CSV mapeado com
+ * tabela de dispositivos.
+ * @param queue Fila de espera para armazenar os pedaços.
+ * @param num_threads Número de threads disponíveis para processamento.
+ * @return Número de pedaços criados (um por thread).
+ */
+int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
+                                     ThreadSafeQueue *queue, int num_threads);
+
+/**
  * Particiona o arquivo CSV em pedaços menores.
  * @param csv Estrutura MappedCSV representando o arquivo CSV mapeado.
  * @param chunk_size Número de linhas por pedaço.

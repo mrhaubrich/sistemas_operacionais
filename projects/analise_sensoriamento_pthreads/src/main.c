@@ -326,12 +326,17 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Particionar por dispositivo em vez de linhas
-    printf("[MAIN] Partitioning CSV by device using smart binning\n");
-    start_timer(&partitioning_timer, "CSV partitioning by device");
-    // Use the optimized partitioning function that groups small devices
-    size_t num_chunks =
-        partition_csv_by_device_optimized(&deviceMappedCsv, queue);
+    printf("[MAIN] Processadores disponíveis: %d\n", num_processors);
+
+    // Particionar dispositivos distribuindo-os entre as threads
+    printf("[MAIN] Partitioning CSV by device across threads\n");
+    start_timer(&partitioning_timer,
+                "CSV partitioning by device across threads");
+
+    // Use the new function that distributes devices across threads
+    size_t num_chunks = partition_csv_by_device_threaded(&deviceMappedCsv,
+                                                         queue, num_processors);
+
     stop_timer(&partitioning_timer);
     printf("[MAIN] Número de chunks particionados: %zu\n", num_chunks);
 
@@ -345,11 +350,8 @@ int main(int argc, char *argv[]) {
     // Caminho para o script Python
     const char *script_path = "./src/script/analyze_data.py";
 
-    // Determinar número de threads para usar (mínimo entre num_processors e
-    // num_chunks)
-    size_t n_threads = ((size_t)num_processors < num_chunks)
-                           ? (size_t)num_processors
-                           : num_chunks;
+    // O número de threads para processar será igual ao número de chunks criados
+    size_t n_threads = num_chunks;
 
     // Cria threads e argumentos
     printf("[MAIN] Allocating memory for %zu threads\n", n_threads);
