@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
 
@@ -10,6 +11,29 @@
 #include "../include/hash_table.h"
 #include "../include/thread_safe_queue.h"
 #include "../include/utils.h"
+
+// Define a timer structure and functions
+typedef struct {
+    struct timeval start;
+    struct timeval end;
+    double elapsed_ms;
+    const char *name;
+} Timer;
+
+// Start a timer
+void start_timer(Timer *timer, const char *name) {
+    timer->name = name;
+    gettimeofday(&timer->start, NULL);
+}
+
+// Stop a timer and print the elapsed time
+void stop_timer(Timer *timer) {
+    gettimeofday(&timer->end, NULL);
+    timer->elapsed_ms = (timer->end.tv_sec - timer->start.tv_sec) * 1000.0;
+    timer->elapsed_ms += (timer->end.tv_usec - timer->start.tv_usec) / 1000.0;
+    printf("[TIMING] %s took %.2f ms (%.2f seconds)\n", timer->name,
+           timer->elapsed_ms, timer->elapsed_ms / 1000.0);
+}
 
 typedef struct {
     int thread_id;
@@ -34,6 +58,9 @@ void *worker_func(void *arg) {
     int chunks_processed = 0;
     size_t total_memory_freed = 0;
 
+    Timer chunk_timer;
+    double total_processing_time = 0.0;
+
     while (1) {
         // Try to dequeue a chunk from the queue
         const char *slice = NULL;
@@ -50,6 +77,8 @@ void *worker_func(void *arg) {
 
         printf("[WORKER-%d] Dequeued chunk #%d: slice_len=%zu\n", id,
                chunks_processed + 1, slice_len);
+
+        start_timer(&chunk_timer, "Python chunk processing");
 
         UDSInfo uds_info;
         generate_uds_path(id, &uds_info);
@@ -121,12 +150,16 @@ void *worker_func(void *arg) {
 
         if (pid > 0) waitpid(pid, NULL, 0);
         cleanup_uds(&uds_info);
+
+        stop_timer(&chunk_timer);
+        total_processing_time += chunk_timer.elapsed_ms;
     }
 
     printf(
         "[WORKER-%d] Worker finished. Processed %d chunks, freed %zu bytes, "
-        "collected %d lines\n",
-        id, chunks_processed, total_memory_freed, total_lines);
+        "collected %d lines. Total processing time: %.2f ms\n",
+        id, chunks_processed, total_memory_freed, total_lines,
+        total_processing_time);
 
     wargs->line_counts[id] = total_lines;
     wargs->results[id] = final_result;
@@ -176,6 +209,11 @@ int find_device_column(const char *header, const char *device_column_name) {
  * Ponto de entrada principal para o programa de processamento de arquivos CSV
  */
 int main(int argc, char *argv[]) {
+    Timer total_timer, mapping_timer, hash_building_timer, partitioning_timer,
+        processing_timer;
+
+    start_timer(&total_timer, "Total program execution");
+
     printf(
         "Processador de Arquivos CSV - Usando pthreads para processamento "
         "paralelo\n");
@@ -208,11 +246,13 @@ int main(int argc, char *argv[]) {
 
     // Primeira etapa: mapear o arquivo para obter o cabeçalho e encontrar o
     // índice da coluna de dispositivo
+    start_timer(&mapping_timer, "Initial CSV mapping");
     MappedCSV temp_csv = map_csv(filepath);
     if (temp_csv.header == NULL) {
         fprintf(stderr, "[MAIN] Falha ao mapear o arquivo\n");
         return EXIT_FAILURE;
     }
+    stop_timer(&mapping_timer);
 
     // Encontrar o índice da coluna de dispositivo
     int device_column = find_device_column(temp_csv.header, device_column_name);
@@ -233,6 +273,7 @@ int main(int argc, char *argv[]) {
 
     // Mapear novamente usando a abordagem baseada em dispositivo
     printf("[MAIN] Mapping CSV with device-based approach\n");
+    start_timer(&hash_building_timer, "Device hash table building");
     DeviceMappedCSV deviceMappedCsv = map_device_csv(filepath, device_column);
     if (deviceMappedCsv.header == NULL || !deviceMappedCsv.device_table) {
         fprintf(stderr,
@@ -240,6 +281,7 @@ int main(int argc, char *argv[]) {
                 "dispositivos\n");
         return EXIT_FAILURE;
     }
+    stop_timer(&hash_building_timer);
 
     // Imprimir informações do arquivo
     printf("\n[MAIN] Informações do CSV:\n");
@@ -261,7 +303,9 @@ int main(int argc, char *argv[]) {
 
     // Particionar por dispositivo em vez de linhas
     printf("[MAIN] Partitioning CSV by device\n");
+    start_timer(&partitioning_timer, "CSV partitioning by device");
     size_t num_chunks = partition_csv_by_device(&deviceMappedCsv, queue);
+    stop_timer(&partitioning_timer);
     printf("[MAIN] Número de dispositivos particionados: %zu\n", num_chunks);
 
     if (num_chunks == 0) {
@@ -303,6 +347,8 @@ int main(int argc, char *argv[]) {
     printf("[MAIN] Iniciando %zu threads para processar %zu dispositivos...\n",
            n_threads, num_chunks);
 
+    start_timer(&processing_timer, "Parallel data processing");
+
     for (size_t i = 0; i < n_threads; ++i) {
         args[i].thread_id = (int)i;
         args[i].queue = queue;
@@ -319,6 +365,8 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
         printf("[MAIN] Thread %zu joined\n", i);
     }
+
+    stop_timer(&processing_timer);
 
     // Soma total de linhas retornadas
     int total_lines = 0;
@@ -382,6 +430,21 @@ int main(int argc, char *argv[]) {
     free(results);
     free(result_sizes);
     printf("\n[MAIN] Arquivo desmapeado e recursos liberados\n");
+
+    stop_timer(&total_timer);
+
+    printf("\n[TIMING] ====== Performance Summary ======\n");
+    printf("[TIMING] Initial CSV mapping: %.2f seconds\n",
+           mapping_timer.elapsed_ms / 1000.0);
+    printf("[TIMING] Device hash table building: %.2f seconds\n",
+           hash_building_timer.elapsed_ms / 1000.0);
+    printf("[TIMING] CSV partitioning by device: %.2f seconds\n",
+           partitioning_timer.elapsed_ms / 1000.0);
+    printf("[TIMING] Parallel data processing: %.2f seconds\n",
+           processing_timer.elapsed_ms / 1000.0);
+    printf("[TIMING] Total program execution: %.2f seconds\n",
+           total_timer.elapsed_ms / 1000.0);
+    printf("[TIMING] =================================\n");
 
     return EXIT_SUCCESS;
 }
