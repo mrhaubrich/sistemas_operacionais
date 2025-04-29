@@ -13,9 +13,6 @@ typedef struct {
         *start;      // Ponteiro para o início do segmento de dados desta thread
     size_t size;     // Tamanho do segmento de dados desta thread
     int line_count;  // Número de linhas contadas por esta thread
-    const char **line_indices;  // Array de ponteiros para inícios de linhas
-    int index_capacity;         // Capacidade alocada para line_indices
-    int index_count;            // Número de entradas em line_indices
 } ThreadData;
 
 /**
@@ -25,9 +22,7 @@ typedef struct {
     pthread_t *threads;       // Array de identificadores de threads
     ThreadData *thread_data;  // Array de estruturas de dados de thread
     int num_threads;          // Número de threads
-    const char *
-        *global_line_index;  // Array global de todos os ponteiros de linha
-    int total_lines;         // Número total de linhas indexadas
+    int total_lines;          // Número total de linhas contadas
 } ThreadResources;
 
 /**
@@ -100,23 +95,5 @@ int start_threads(ThreadResources *resources, const char *data, size_t size);
  * @return Contagem total de linhas de todas as threads
  */
 int join_threads_and_collect_results(ThreadResources *resources);
-
-/**
- * Mescla índices de linha locais das threads em um índice global
- * @param resources Estrutura de recursos de threads
- * @return Ponteiro para o array de índice de linha global ou NULL em caso de
- * falha
- */
-const char **merge_line_indices(ThreadResources *resources);
-
-/**
- * Remove índices de linha duplicados do índice global
- * @param line_indices Array de índices de linha
- * @param total_lines Número total de linhas no array
- * @param num_duplicates Número esperado de duplicatas a serem removidas
- * @return Número de entradas realmente removidas
- */
-int remove_duplicate_line_indices(const char **line_indices, int total_lines,
-                                  int num_duplicates);
 
 #endif  // THREAD_UTILS_H

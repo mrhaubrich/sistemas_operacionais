@@ -11,12 +11,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "../include/line_count.h"
-
 // Número inicial de buckets da tabela hash (deve ser primo para melhor
-// distribuição)
-#define DEFAULT_HASH_BUCKET_COUNT 101
-#define INITIAL_LINES_CAPACITY 64
+// distribuição) Aumento do número de buckets para melhor distribuição com
+// grandes volumes de dados
+#define DEFAULT_HASH_BUCKET_COUNT 10007
+#define INITIAL_LINES_CAPACITY 256
 
 // Fator de carga máximo antes do redimensionamento
 #define MAX_LOAD_FACTOR 0.75
@@ -56,8 +55,8 @@ static DeviceEntry *create_device_entry(const char *device_id) {
     }
 
     entry->capacity = INITIAL_LINES_CAPACITY;
-    entry->line_indices = malloc(sizeof(const char *) * entry->capacity);
-    if (!entry->line_indices) {
+    entry->lines = malloc(sizeof(const char *) * entry->capacity);
+    if (!entry->lines) {
         free(entry->device_id);
         free(entry);
         return NULL;
@@ -76,7 +75,7 @@ static void free_device_entry(DeviceEntry *entry) {
     if (!entry) return;
 
     free(entry->device_id);
-    free(entry->line_indices);
+    free(entry->lines);
     free(entry);
 }
 
@@ -202,19 +201,19 @@ int device_hash_table_add_line(DeviceHashTable *table, const char *line) {
     if (entry->line_count >= entry->capacity) {
         int new_capacity = entry->capacity * 2;
         const char **new_line_indices =
-            realloc(entry->line_indices, sizeof(const char *) * new_capacity);
+            realloc(entry->lines, sizeof(const char *) * new_capacity);
         if (!new_line_indices) {
             pthread_mutex_unlock(&hash_mutex);
             free(device_id);
             return -1;
         }
 
-        entry->line_indices = new_line_indices;
+        entry->lines = new_line_indices;
         entry->capacity = new_capacity;
     }
 
     // Adiciona a linha aos índices deste dispositivo
-    entry->line_indices[entry->line_count++] = line;
+    entry->lines[entry->line_count++] = line;
 
     pthread_mutex_unlock(&hash_mutex);
     free(device_id);
@@ -241,7 +240,7 @@ const char **device_hash_table_get_lines(DeviceHashTable *table,
     while (entry) {
         if (strcmp(entry->device_id, device_id) == 0) {
             *line_count_ptr = entry->line_count;
-            return entry->line_indices;
+            return entry->lines;
         }
         entry = entry->next;
     }
@@ -355,9 +354,18 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
     memcpy(header_copy, data, header_len);
     header_copy[header_len] = '\0';
 
-    // Inicializa a tabela hash de dispositivos
+    // Inicializa a tabela hash de dispositivos com tamanho maior para arquivos
+    // grandes
+    size_t estimated_lines =
+        sb.st_size / 100;  // Estimativa grosseira de linhas
+    int bucket_count =
+        (estimated_lines > 1000000)
+            ? 100003
+            : DEFAULT_HASH_BUCKET_COUNT;  // Bucket size maior para arquivos
+                                          // grandes
+
     DeviceHashTable *device_table =
-        device_hash_table_create(DEFAULT_HASH_BUCKET_COUNT, device_column);
+        device_hash_table_create(bucket_count, device_column);
     if (!device_table) {
         free(header_copy);
         munmap(data, sb.st_size);
@@ -365,43 +373,67 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
         return result;
     }
 
-    // Conta linhas e constrói índice
-    const char **line_indices = NULL;
-    int total_indexed_lines = 0;
+    printf(
+        "Construindo tabela hash de dispositivos diretamente (isso pode levar "
+        "alguns minutos)...\n");
 
-    int line_count = count_lines_in_memory_parallel(
-        data, sb.st_size, &line_indices, &total_indexed_lines);
+    // Inicia do primeiro caractere após o final do cabeçalho (após \n)
+    const char *curr = header_end + 1;
+    const char *end = data + sb.st_size;
+    int line_count = 0;
+    int lines_processed = 0;
 
-    if (!line_indices ||
-        total_indexed_lines <=
-            1) {  // Pelo menos uma linha de dados além do cabeçalho
-        free(header_copy);
-        device_hash_table_destroy(device_table);
-        munmap(data, sb.st_size);
-        fprintf(stderr, "Arquivo CSV vazio ou falha ao indexar linhas\n");
-        return result;
-    }
+    // Processa todas as linhas diretamente para construir a tabela hash
+    while (curr < end) {
+        // Encontra o fim da linha atual
+        const char *line_end = strchr(curr, '\n');
+        if (!line_end) {
+            // Se não encontrar \n, use o fim do arquivo
+            line_end = end;
+        }
 
-    // Preenche a tabela hash com as linhas indexadas, pulando o cabeçalho
-    // (índice 0)
-    for (int i = 1; i < total_indexed_lines; i++) {
-        int status = device_hash_table_add_line(device_table, line_indices[i]);
-        if (status != 0) {
-            fprintf(stderr,
-                    "Aviso: Falha ao adicionar linha %d à tabela hash\n", i);
+        // Linha vazia, pula
+        if (line_end > curr) {
+            line_count++;
+
+            // Adiciona a linha na tabela hash
+            // Note: não precisamos duplicar a linha, apenas apontamos para ela
+            // na memória mapeada
+            int status = device_hash_table_add_line(device_table, curr);
+
+            // Mostra progresso
+            lines_processed++;
+            if (lines_processed % 1000000 == 0) {
+                printf("Processadas %d linhas...\n", lines_processed);
+            }
+
+            if (status != 0 && lines_processed % 100000 == 0) {
+                fprintf(stderr,
+                        "Aviso: Falha ao adicionar linha %d à tabela hash\n",
+                        lines_processed);
+            }
+        }
+
+        // Avança para a próxima linha (depois do \n)
+        curr = line_end + 1;
+
+        // Se chegamos ao fim do arquivo, saímos do loop
+        if (line_end == end) {
+            break;
         }
     }
+
+    printf(
+        "Tabela hash construída com sucesso. %d dispositivos únicos "
+        "encontrados em %d linhas.\n",
+        device_table->device_count, line_count);
 
     // Preenche a estrutura de resultado
     result.header = header_copy;
     result.device_table = device_table;
-    result.data_count = total_indexed_lines - 1;  // Excluindo o cabeçalho
+    result.data_count = line_count;
     result.size = sb.st_size;
     result.mapped_data = data;
-
-    // Libera o array de índices de linha, pois agora temos as linhas
-    // organizadas por dispositivo
-    free(line_indices);
 
     return result;
 }

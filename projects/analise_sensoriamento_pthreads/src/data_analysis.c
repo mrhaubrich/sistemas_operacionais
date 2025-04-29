@@ -15,28 +15,45 @@ int partition_csv(const MappedCSV *csv, size_t chunk_size,
     if (!csv || !queue || chunk_size == 0) return 0;
 
     size_t chunk_count = 0;
-    size_t line = 0;
+    const char *data = csv->mapped_data;
+    const char *end = data + csv->size;
+
+    // Pular cabeçalho
+    const char *header_end = strchr(data, '\n');
+    if (!header_end) return 0;
+
+    const char *curr = header_end + 1;  // Começar após o cabeçalho
     size_t header_len = strlen(csv->header);
 
-    while (line < (size_t)csv->data_count) {
-        size_t start = line;
-        size_t end = (line + chunk_size < (size_t)csv->data_count)
-                         ? (line + chunk_size)
-                         : (size_t)csv->data_count;
-        const char *start_ptr = csv->line_indices[start];
-        const char *end_ptr =
-            (end < (size_t)csv->data_count)
-                ? csv->line_indices[end]
-                : (csv->line_indices[csv->data_count - 1] +
-                   strlen(csv->line_indices[csv->data_count - 1]));
-        size_t data_len = end_ptr - start_ptr;
+    while (curr < end && chunk_count < (size_t)csv->data_count) {
+        // Iniciar um novo chunk
+        const char *chunk_start = curr;
+        size_t lines_in_chunk = 0;
 
-        // Enfileira o ponteiro, tamanho do chunk, header e tamanho do header
-        thread_safe_queue_enqueue(queue, start_ptr, data_len, csv->header,
+        // Acumular linhas até o tamanho do chunk
+        while (lines_in_chunk < chunk_size && curr < end) {
+            // Encontrar o fim da linha atual
+            const char *line_end = strchr(curr, '\n');
+            if (!line_end) {
+                // Se não houver mais quebras de linha, usar o fim do arquivo
+                line_end = end;
+            }
+
+            curr = line_end + 1;  // Mover para a próxima linha
+            lines_in_chunk++;
+
+            if (line_end >= end) break;  // Chegamos ao fim do arquivo
+        }
+
+        // Calcular o tamanho do chunk
+        size_t data_len = curr - chunk_start;
+
+        // Enfileirar o chunk
+        thread_safe_queue_enqueue(queue, chunk_start, data_len, csv->header,
                                   header_len);
         chunk_count++;
-        line = end;
     }
+
     return chunk_count;
 }
 

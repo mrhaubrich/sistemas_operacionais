@@ -4,40 +4,32 @@
 #include <stddef.h>
 
 /**
- * Estrutura representando um arquivo mapeado na memória com informações de
- * indexação de linhas
+ * Estrutura representando um arquivo mapeado na memória
  */
 typedef struct {
     char *data;          // Ponteiro para os dados mapeados
     size_t size;         // Tamanho dos dados mapeados em bytes
     size_t block_count;  // Número de blocos no arquivo
     int line_count;      // Número total de linhas no arquivo
-    const char *
-        *line_indices;        // Array de ponteiros para o início de cada linha
-    int total_indexed_lines;  // Número de linhas indexadas
 } MappedFile;
 
 typedef struct {
-    const char *header;         // Ponteiro para o cabeçalho do csv
-    const char **line_indices;  // Array de ponteiros para o início das linhas
-    int data_count;             // Número de linhas no arquivo CSV
-    size_t size;                // Tamanho dos dados mapeados em bytes
-    void *mapped_data;          // Ponteiro original para a região mmap
-    const char *
-        *allocated_line_indices;  // Ponteiro original do array de índices
+    const char *header;  // Ponteiro para o cabeçalho do csv
+    int data_count;      // Número de linhas no arquivo CSV
+    size_t size;         // Tamanho dos dados mapeados em bytes
+    void *mapped_data;   // Ponteiro original para a região mmap
 } MappedCSV;
 
 /**
- * Mapeia um arquivo na memória e constrói um índice de linhas para acesso
- * rápido
+ * Mapeia um arquivo na memória
  * @param filepath Caminho para o arquivo a ser mapeado
- * @return Estrutura MappedCSV contendo o mapeamento e informações de linha
+ * @return Estrutura MappedCSV contendo o mapeamento
  */
 MappedCSV map_csv(const char *filepath);
 
 /**
  * Desmapeia um arquivo previamente mapeado e libera os recursos associados
- * @param file Ponteiro para a estrutura MappedCSV
+ * @param csv Ponteiro para a estrutura MappedCSV
  */
 void unmap_csv(MappedCSV *csv);
 

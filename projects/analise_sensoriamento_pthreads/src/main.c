@@ -105,7 +105,6 @@ int find_device_column(const char *header, const char *device_column_name) {
     if (!header || !device_column_name) return -1;
 
     // Por padrão, usamos '|' como delimitador CSV
-    const char *p = header;
     int column_index = 0;
 
     // Tokenize o cabeçalho
@@ -232,8 +231,9 @@ int main(int argc, char *argv[]) {
 
     // Determinar número de threads para usar (mínimo entre num_processors e
     // num_chunks)
-    size_t n_threads =
-        (num_processors < num_chunks) ? num_processors : num_chunks;
+    size_t n_threads = ((size_t)num_processors < num_chunks)
+                           ? (size_t)num_processors
+                           : num_chunks;
 
     // Cria threads e argumentos
     pthread_t *threads = malloc(sizeof(pthread_t) * n_threads);

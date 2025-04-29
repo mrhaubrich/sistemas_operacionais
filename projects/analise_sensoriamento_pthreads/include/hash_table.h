@@ -9,11 +9,10 @@
  * Estrutura para armazenar um conjunto de linhas para um único dispositivo
  */
 typedef struct DeviceEntry {
-    char *device_id;  // ID do dispositivo
-    const char *
-        *line_indices;  // Array de ponteiros para as linhas deste dispositivo
-    int line_count;     // Número de linhas para este dispositivo
-    int capacity;       // Capacidade alocada para o array line_indices
+    char *device_id;     // ID do dispositivo
+    const char **lines;  // Array de ponteiros para as linhas deste dispositivo
+    int line_count;      // Número de linhas para este dispositivo
+    int capacity;        // Capacidade alocada para o array lines
     struct DeviceEntry *next;  // Próxima entrada (para resolução de colisão)
 } DeviceEntry;
 
