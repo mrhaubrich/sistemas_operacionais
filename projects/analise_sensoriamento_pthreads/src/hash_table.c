@@ -299,8 +299,7 @@ char **device_hash_table_get_all_devices(DeviceHashTable *table,
  */
 DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
     DeviceMappedCSV result = {NULL, NULL, 0, 0, NULL};
-    struct timeval start_time, end_time;
-    double elapsed_ms;
+    struct timeval start_time;
 
     if (!filepath || device_column < 0) {
         fprintf(
@@ -308,9 +307,6 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
             "Caminho do arquivo inválido ou coluna de dispositivo inválida\n");
         return result;
     }
-
-    gettimeofday(&start_time, NULL);
-    printf("[TIMING] Starting file mapping for device CSV\n");
 
     int fd = open(filepath, O_RDONLY);
     if (fd == -1) {
@@ -340,13 +336,6 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
 
     close(fd);  // Fecha o descritor de arquivo após o mapeamento
 
-    // Calcula quanto tempo levou para mapear o arquivo
-    gettimeofday(&end_time, NULL);
-    elapsed_ms = (end_time.tv_sec - start_time.tv_sec) * 1000.0;
-    elapsed_ms += (end_time.tv_usec - start_time.tv_usec) / 1000.0;
-    printf("[TIMING] File mapping took %.2f ms (%.2f seconds)\n", elapsed_ms,
-           elapsed_ms / 1000.0);
-
     // Reinicia o timer para medir a extração do cabeçalho
     gettimeofday(&start_time, NULL);
 
@@ -370,17 +359,8 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
     memcpy(header_copy, data, header_len);
     header_copy[header_len] = '\0';
 
-    // Calcula quanto tempo levou para extrair o cabeçalho
-    gettimeofday(&end_time, NULL);
-    elapsed_ms = (end_time.tv_sec - start_time.tv_sec) * 1000.0;
-    elapsed_ms += (end_time.tv_usec - start_time.tv_usec) / 1000.0;
-    printf("[TIMING] Header extraction took %.2f ms\n", elapsed_ms);
-
     // Inicializa a tabela hash de dispositivos com tamanho maior para arquivos
     // grandes
-    gettimeofday(&start_time, NULL);
-    printf("[TIMING] Starting hash table initialization\n");
-
     size_t estimated_lines =
         sb.st_size / 100;  // Estimativa grosseira de linhas
     int bucket_count =
@@ -398,29 +378,11 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
         return result;
     }
 
-    // Calcula quanto tempo levou para inicializar a tabela hash
-    gettimeofday(&end_time, NULL);
-    elapsed_ms = (end_time.tv_sec - start_time.tv_sec) * 1000.0;
-    elapsed_ms += (end_time.tv_usec - start_time.tv_usec) / 1000.0;
-    printf("[TIMING] Hash table initialization took %.2f ms\n", elapsed_ms);
-
-    // Reinicia o timer para medir a construção da tabela hash
-    gettimeofday(&start_time, NULL);
-    printf("[TIMING] Starting hash table population\n");
-
-    printf(
-        "Construindo tabela hash de dispositivos diretamente (isso pode levar "
-        "alguns minutos)...\n");
-
     // Inicia do primeiro caractere após o final do cabeçalho (após \n)
     const char *curr = header_end + 1;
     const char *end = data + sb.st_size;
     int line_count = 0;
     int lines_processed = 0;
-    struct timeval batch_start, batch_end;
-    double batch_elapsed;
-
-    gettimeofday(&batch_start, NULL);
 
     // Processa todas as linhas diretamente para construir a tabela hash
     while (curr < end) {
@@ -442,18 +404,6 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
 
             // Mostra progresso a cada 1 milhão de linhas
             lines_processed++;
-            if (lines_processed % 1000000 == 0) {
-                gettimeofday(&batch_end, NULL);
-                batch_elapsed =
-                    (batch_end.tv_sec - batch_start.tv_sec) * 1000.0;
-                batch_elapsed +=
-                    (batch_end.tv_usec - batch_start.tv_usec) / 1000.0;
-                printf(
-                    "[TIMING] Processed %d lines (%.2f seconds for this "
-                    "batch)\n",
-                    lines_processed, batch_elapsed / 1000.0);
-                gettimeofday(&batch_start, NULL);
-            }
         }
 
         // Avança para a próxima linha (depois do \n)
@@ -464,22 +414,6 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
             break;
         }
     }
-
-    // Calcula quanto tempo levou para construir a tabela hash completa
-    gettimeofday(&end_time, NULL);
-    elapsed_ms = (end_time.tv_sec - start_time.tv_sec) * 1000.0;
-    elapsed_ms += (end_time.tv_usec - start_time.tv_usec) / 1000.0;
-    printf(
-        "[TIMING] Hash table population took %.2f ms (%.2f seconds) for %d "
-        "lines\n",
-        elapsed_ms, elapsed_ms / 1000.0, line_count);
-    printf("[TIMING] Processing speed: %.2f lines/second\n",
-           line_count / (elapsed_ms / 1000.0));
-
-    printf(
-        "Tabela hash construída com sucesso. %d dispositivos únicos "
-        "encontrados em %d linhas.\n",
-        device_table->device_count, line_count);
 
     // Preenche a estrutura de resultado
     result.header = header_copy;

@@ -82,12 +82,13 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
                                      ThreadSafeQueue *queue, int num_threads) {
     if (!csv || !queue || !csv->device_table || num_threads <= 0) return 0;
 
-    struct timeval start_time, end_time;
-    double elapsed_ms;
-    gettimeofday(&start_time, NULL);
+    // Informações do CSV
+    size_t header_len = strlen(csv->header);
+    printf("[INFO] CSV Information: Header size: %zu, Data size: %zu\n",
+           header_len, csv->size);
 
-    printf("[CHUNKING] Starting device distribution across %d threads\n",
-           num_threads);
+    // Processadores disponíveis
+    printf("[INFO] Available processors: %d\n", num_threads);
 
     // Obter todos os dispositivos únicos
     int device_count = 0;
@@ -197,17 +198,8 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
         }
     }
 
-    // Imprimir informações de distribuição
-    printf("[CHUNKING] Device distribution across threads:\n");
-    for (int t = 0; t < num_threads; t++) {
-        printf("[CHUNKING] Thread %d: %d devices, %d lines\n", t,
-               thread_allocations[t].device_count,
-               thread_allocations[t].total_lines);
-    }
-
     // Agora criar chunks por thread combinando os dados dos dispositivos
     // atribuídos
-    size_t header_len = strlen(csv->header);
     int chunks_created = 0;
     const char *file_start = csv->mapped_data;
     const char *file_end = file_start + csv->size;
@@ -375,10 +367,6 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
             thread_safe_queue_enqueue(queue, final_chunk, total_chunk_size,
                                       csv->header, header_len);
             chunks_created++;
-            printf(
-                "[CHUNKING] Created chunk for thread %d: %d devices, %d lines, "
-                "%zu bytes\n",
-                t, alloc->device_count, total_lines, total_chunk_size);
         } else if (alloc->device_count > 0) {
             // Se não conseguimos criar o chunk para uma thread com
             // dispositivos, isso é um erro
@@ -391,10 +379,6 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
                 thread_safe_queue_enqueue(queue, empty_chunk, 0, csv->header,
                                           header_len);
                 chunks_created++;
-                printf(
-                    "[CHUNKING] Created empty chunk for thread %d (no devices "
-                    "assigned)\n",
-                    t);
             }
         }
     }
@@ -414,13 +398,6 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
         free(device_ids[i]);
     }
     free(device_ids);
-
-    gettimeofday(&end_time, NULL);
-    elapsed_ms = (end_time.tv_sec - start_time.tv_sec) * 1000.0;
-    elapsed_ms += (end_time.tv_usec - start_time.tv_usec) / 1000.0;
-
-    printf("[CHUNKING] Created %d chunks across %d threads in %.2f seconds\n",
-           chunks_created, num_threads, elapsed_ms / 1000.0);
 
     // Devemos ter exatamente um chunk por thread
     return chunks_created;
