@@ -327,6 +327,38 @@ int main(int argc, char *argv[]) {
 
     unmap_device_csv(&deviceMappedCsv);
 
+    Timer file_write_timer;
+    start_timer(&file_write_timer, "Result file writing");
+
+    // === Write all results to "result.csv" ===
+    FILE *outf = fopen("result.csv", "w");
+    if (outf) {
+        int header_written = 0;
+        for (size_t i = 0; i < n_threads; ++i) {
+            if (results[i] && result_sizes[i] > 0) {
+                // Find the first newline (end of header)
+                char *newline = memchr(results[i], '\n', result_sizes[i]);
+                size_t header_len = newline ? (newline - results[i] + 1) : 0;
+                if (!header_written && header_len > 0) {
+                    fwrite(results[i], 1, header_len, outf);
+                    header_written = 1;
+                }
+                // Write the rest (skip header if present)
+                size_t offset = header_len;
+                size_t data_len = result_sizes[i] - offset;
+                if (data_len > 0) {
+                    fwrite(results[i] + offset, 1, data_len, outf);
+                }
+            }
+        }
+        fclose(outf);
+        printf("[MAIN] Result file written: result.csv\n");
+    } else {
+        fprintf(stderr, "[MAIN] Failed to write result.csv\n");
+    }
+
+    stop_timer(&file_write_timer);
+
     // Limpeza final dos resultados
     for (size_t i = 0; i < n_threads; ++i) {
         if (results[i]) {
@@ -348,6 +380,8 @@ int main(int argc, char *argv[]) {
            partitioning_timer.elapsed_ms / 1000.0);
     printf("[TIMING] Parallel data processing: %.2f seconds\n",
            processing_timer.elapsed_ms / 1000.0);
+    printf("[TIMING] Result file writing: %.2f seconds\n",
+           file_write_timer.elapsed_ms / 1000.0);
     printf("[TIMING] Total program execution: %.2f seconds\n",
            total_timer.elapsed_ms / 1000.0);
     printf("[TIMING] =================================\n");
