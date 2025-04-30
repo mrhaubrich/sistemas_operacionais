@@ -12,54 +12,6 @@ extern char **environ;
 
 #include "../include/thread_safe_queue.h"
 
-// Particiona o arquivo CSV em pedaços menores e enfileira-os na fila.
-int partition_csv(const MappedCSV *csv, size_t chunk_size,
-                  ThreadSafeQueue *queue) {
-    if (!csv || !queue || chunk_size == 0) return 0;
-
-    size_t chunk_count = 0;
-    const char *data = csv->mapped_data;
-    const char *end = data + csv->size;
-
-    // Pular cabeçalho
-    const char *header_end = strchr(data, '\n');
-    if (!header_end) return 0;
-
-    const char *curr = header_end + 1;  // Começar após o cabeçalho
-    size_t header_len = strlen(csv->header);
-
-    while (curr < end && chunk_count < (size_t)csv->data_count) {
-        // Iniciar um novo chunk
-        const char *chunk_start = curr;
-        size_t lines_in_chunk = 0;
-
-        // Acumular linhas até o tamanho do chunk
-        while (lines_in_chunk < chunk_size && curr < end) {
-            // Encontrar o fim da linha atual
-            const char *line_end = strchr(curr, '\n');
-            if (!line_end) {
-                // Se não houver mais quebras de linha, usar o fim do arquivo
-                line_end = end;
-            }
-
-            curr = line_end + 1;  // Mover para a próxima linha
-            lines_in_chunk++;
-
-            if (line_end >= end) break;  // Chegamos ao fim do arquivo
-        }
-
-        // Calcular o tamanho do chunk
-        size_t data_len = curr - chunk_start;
-
-        // Enfileirar o chunk
-        thread_safe_queue_enqueue(queue, chunk_start, data_len, csv->header,
-                                  header_len);
-        chunk_count++;
-    }
-
-    return chunk_count;
-}
-
 // Estrutura para armazenar informações do dispositivo
 typedef struct {
     char *device_id;
@@ -73,6 +25,30 @@ int compare_device_info(const void *a, const void *b) {
     return device_b->line_count - device_a->line_count;
 }
 
+void print_info(const DeviceMappedCSV *csv, int num_threads) {
+    // Informações do CSV
+    size_t header_len = strlen(csv->header);
+    printf("[INFO] CSV Information: Header size: %zu, Data size: %zu\n",
+           header_len, csv->size);
+
+    // Processadores disponíveis
+    printf("[INFO] Available processors: %d\n", num_threads);
+}
+
+int validate_devices(DeviceInfo *devices, int device_count,
+                     const char **device_ids) {
+    if (!devices) {
+        fprintf(stderr, "Failed to allocate memory for device sorting\n");
+        // Cleanup
+        for (int i = 0; i < device_count; i++) {
+            free((void *)device_ids[i]);
+        }
+        free(device_ids);
+        return 0;
+    }
+    return 1;
+}
+
 /**
  * Particiona o arquivo CSV por dispositivo, otimizando para o número de
  * threads. Os dispositivos são distribuídos entre as threads para balancear o
@@ -82,13 +58,8 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
                                      ThreadSafeQueue *queue, int num_threads) {
     if (!csv || !queue || !csv->device_table || num_threads <= 0) return 0;
 
-    // Informações do CSV
     size_t header_len = strlen(csv->header);
-    printf("[INFO] CSV Information: Header size: %zu, Data size: %zu\n",
-           header_len, csv->size);
-
-    // Processadores disponíveis
-    printf("[INFO] Available processors: %d\n", num_threads);
+    print_info(csv, num_threads);
 
     // Obter todos os dispositivos únicos
     int device_count = 0;
@@ -99,13 +70,8 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
 
     // Coletar linha por dispositivo para ordenação
     DeviceInfo *devices = malloc(device_count * sizeof(DeviceInfo));
-    if (!devices) {
-        fprintf(stderr, "Failed to allocate memory for device sorting\n");
-        // Cleanup
-        for (int i = 0; i < device_count; i++) {
-            free(device_ids[i]);
-        }
-        free(device_ids);
+    if (validate_devices(devices, device_count, (const char **)device_ids) ==
+        0) {
         return 0;
     }
 

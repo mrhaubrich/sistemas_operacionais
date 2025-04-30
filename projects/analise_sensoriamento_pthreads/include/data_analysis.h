@@ -33,16 +33,6 @@ int partition_csv_by_device_threaded(const DeviceMappedCSV *csv,
                                      ThreadSafeQueue *queue, int num_threads);
 
 /**
- * Particiona o arquivo CSV em pedaços menores.
- * @param csv Estrutura MappedCSV representando o arquivo CSV mapeado.
- * @param chunk_size Número de linhas por pedaço.
- * @param queue Fila de espera para armazenar os pedaços.
- * @return Número de pedaços criados.
- */
-int partition_csv(const MappedCSV *csv, size_t chunk_size,
-                  ThreadSafeQueue *queue);
-
-/**
  * Gera um caminho UDS único para um dado ID de fatia.
  * @param slice_id O ID da fatia.
  * @param uds_info Ponteiro para a struct UDSInfo a ser preenchida.
