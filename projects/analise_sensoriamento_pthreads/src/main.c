@@ -397,10 +397,13 @@ int main(int argc, char *argv[]) {
 
     stop_timer(&processing_timer);
 
-    // Soma total de linhas retornadas
+    // Soma total de linhas retornadas, excluindo cabeçalhos
     int total_lines = 0;
     for (size_t i = 0; i < n_threads; ++i) {
-        total_lines += line_counts[i];
+        if (line_counts[i] > 0) {
+            total_lines +=
+                (line_counts[i] - 1);  // Subtrai 1 para remover o cabeçalho
+        }
     }
 
     // Limpeza antecipada dos arrays de contagem e argumentos
