@@ -299,7 +299,6 @@ char **device_hash_table_get_all_devices(DeviceHashTable *table,
  */
 DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
     DeviceMappedCSV result = {NULL, NULL, 0, 0, NULL};
-    struct timeval start_time;
 
     if (!filepath || device_column < 0) {
         fprintf(
@@ -335,9 +334,6 @@ DeviceMappedCSV map_device_csv(const char *filepath, int device_column) {
     }
 
     close(fd);  // Fecha o descritor de arquivo após o mapeamento
-
-    // Reinicia o timer para medir a extração do cabeçalho
-    gettimeofday(&start_time, NULL);
 
     // Procura a primeira quebra de linha para separar o cabeçalho
     const char *header_end = strchr(data, '\n');
