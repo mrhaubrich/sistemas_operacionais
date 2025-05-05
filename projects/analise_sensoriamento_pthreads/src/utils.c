@@ -57,7 +57,7 @@ int get_available_number_of_processors(void) {
  * @param num_lines Número de linhas a serem impressas
  */
 void print_lines_range(MappedCSV csv, int start_line, int num_lines) {
-    if (!csv.header || !csv.line_indices) {
+    if (!csv.header || !csv.mapped_data) {
         printf("Sem dados para exibir.\n");
         return;
     }

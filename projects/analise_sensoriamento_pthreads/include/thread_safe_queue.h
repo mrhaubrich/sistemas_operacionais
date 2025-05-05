@@ -10,7 +10,10 @@ extern "C" {
 
 // Each node represents a slice from the mapped CSV.
 typedef struct thread_safe_queue_node {
-    const char *slice;  // Full string pointer to the slice.
+    const char *slice;   // Full string pointer to the slice.
+    size_t slice_len;    // Length of the slice.
+    const char *header;  // Pointer to the CSV header.
+    size_t header_len;   // Length of the header.
     struct thread_safe_queue_node *next;
 } ThreadSafeQueueNode;
 
@@ -27,11 +30,15 @@ ThreadSafeQueue *thread_safe_queue_create(void);
 
 // Enqueues a slice (full string pointer) into the queue.
 // Returns 0 on success or -1 on failure.
-int thread_safe_queue_enqueue(ThreadSafeQueue *q, const char *slice);
+int thread_safe_queue_enqueue(ThreadSafeQueue *q, const char *slice,
+                              size_t slice_len, const char *header,
+                              size_t header_len);
 
 // Dequeues a slice from the queue. Returns the slice pointer, or NULL if the
 // queue is empty.
-const char *thread_safe_queue_dequeue(ThreadSafeQueue *q);
+int thread_safe_queue_dequeue(ThreadSafeQueue *q, const char **slice,
+                              size_t *slice_len, const char **header,
+                              size_t *header_len);
 
 // Peeks at the front slice without removing it. Returns the slice pointer or
 // NULL if empty.
