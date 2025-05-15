@@ -34,20 +34,6 @@ def read_csv_from_file(file_path):
         return io.StringIO(file.read())
 
 
-def normalize_dataframe(df: pl.DataFrame) -> pl.DataFrame:
-    # Remove todos dados que não tem a coluna "device"
-    # Drop unnecessary columns in one go
-    drop_cols = [col for col in ["id", "latitude", "longitude"] if col in df.columns]
-    df = df.drop(drop_cols)
-    df = df.drop_nulls()
-    if "device" not in df.columns:
-        raise ValueError("O DataFrame não contém a coluna 'device'.")
-    df = df.filter(df["device"].is_not_null())
-    if df.is_empty():
-        raise ValueError("O DataFrame está vazio após a normalização.")
-    return df
-
-
 def analyze_csv_data(csv_data):
     df = pl.read_csv(csv_data, separator="|", infer_schema_length=0)
     # Drop unnecessary columns and nulls, filter device
@@ -90,6 +76,10 @@ def analyze_csv_data(csv_data):
             .alias("data")
         ]
     )
+
+    # remove datas menores que 2024-03-01
+    df = df.filter(df["data"] >= datetime(2024, 3, 1))
+
     df = df.with_columns([df["data"].dt.strftime("%Y-%m").alias("ano-mes")])
     # Sensor columns
     sensors = [
