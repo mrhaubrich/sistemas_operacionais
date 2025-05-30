@@ -35,10 +35,6 @@ struct Args {
     #[arg(long, default_value = "|")]
     delimiter: char,
     
-    /// Use async processing instead of parallel processing
-    #[arg(long)]
-    use_async: bool,
-    
     /// Use work-stealing processor instead of rayon
     #[arg(long)]
     use_work_stealing: bool,
@@ -68,8 +64,7 @@ fn main() -> Result<()> {
     println!("[SYSTEM] Available CPU cores: {}", num_processors);
     println!("[SYSTEM] Using {} worker threads", num_workers);
     println!("[SYSTEM] Processing mode: {}", 
-        if args.use_async { "Async" } 
-        else if args.use_work_stealing { "Work-stealing" }
+        if args.use_work_stealing { "Work-stealing" }
         else { "Rayon parallel" }
     );
     
@@ -105,12 +100,13 @@ fn main() -> Result<()> {
     
     let data = mapped_file.get_data()
         .with_context(|| "Failed to get CSV data")?;
-    
+
     let device_hash_table = build_device_hash_table(
         data,
         device_column_index,
         &mapped_file.header,
         &config,
+        mapped_file.data_start_offset, // pass offset for zero-copy
     ).with_context(|| "Failed to build device hash table")?;
     
     let hash_time = hash_start.elapsed();
@@ -131,7 +127,12 @@ fn main() -> Result<()> {
     println!("\n[PHASE 3] Partitioning data by device...");
     let partition_start = Instant::now();
     
-    let chunks = partition_by_device(&device_hash_table, num_workers, &mapped_file.header);
+    let chunks = partition_by_device(
+        &device_hash_table,
+        &mapped_file.mmap,
+        num_workers,
+        &mapped_file.header,
+    );
     let partition_time = partition_start.elapsed();
     
     println!("[PHASE 3] ✅ Data partitioned in {:.2}ms", partition_time.as_millis());
@@ -150,13 +151,7 @@ fn main() -> Result<()> {
     println!("\n[PHASE 4] Processing data chunks in parallel...");
     let processing_start = Instant::now();
     
-    let results = if args.use_async {
-        // Use async processing
-        let rt = tokio::runtime::Runtime::new()
-            .with_context(|| "Failed to create async runtime")?;
-        rt.block_on(crate::parallel_processor::process_chunks_async(chunks))
-            .with_context(|| "Async processing failed")?
-    } else if args.use_work_stealing {
+    let results = if args.use_work_stealing {
         // Use work-stealing processor
         let processor = WorkStealingProcessor::new(num_workers);
         processor.process_chunks(chunks)

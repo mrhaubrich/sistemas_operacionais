@@ -3,18 +3,21 @@ use ahash::AHashMap;
 use anyhow::Result;
 
 /// Build a hash table organizing CSV data by device
-pub fn build_device_hash_table<'a>(
-    data: &'a str,
+pub fn build_device_hash_table(
+    data: &str,
     device_column_index: usize,
     _header: &str,
     config: &ProcessingConfig,
-) -> Result<DeviceHashTable<'a>> {
+    data_offset: usize, // new: offset of data region in mmap
+) -> Result<DeviceHashTable> {
     let estimated_lines = data.lines().count();
-    let mut hash_table: DeviceHashTable<'a> = AHashMap::with_capacity(estimated_lines / 2);
+    let mut hash_table: DeviceHashTable = AHashMap::with_capacity(estimated_lines / 2);
     let delimiter = config.delimiter as u8;
+    let mut byte_offset = 0;
     for line in data.lines() {
-        let line = line; // no trim for performance
+        let line_len = line.len();
         if line.is_empty() {
+            byte_offset += line_len + 1; // +1 for '\n'
             continue;
         }
         let bytes = line.as_bytes();
@@ -42,27 +45,33 @@ pub fn build_device_hash_table<'a>(
         }
         if !found {
             eprintln!("Warning: Line has insufficient fields: {}", line);
+            byte_offset += line_len + 1;
             continue;
         }
-        // SAFETY: line is valid UTF-8, so this slice is too
         let device_id = unsafe { std::str::from_utf8_unchecked(&bytes[col_start..col_end]) };
         if device_id.is_empty() {
+            byte_offset += line_len + 1;
             continue;
         }
+        // Store the offset of this line in the mmap
+        let start = data_offset + byte_offset;
+        let end = start + line_len;
         hash_table
             .entry(device_id.to_string())
             .or_insert_with(Vec::new)
-            .push(line);
+            .push((start, end));
+        byte_offset += line_len + 1; // +1 for '\n'
     }
     Ok(hash_table)
 }
 
 /// Partition devices across workers to balance load
 pub fn partition_by_device<'a>(
-    hash_table: &DeviceHashTable<'a>,
+    hash_table: &AHashMap<String, Vec<(usize, usize)>>,
+    mmap_data: &'a [u8],
     num_workers: usize,
     header: &str,
-) -> Vec<CsvChunk> {
+) -> Vec<CsvChunk<'a>> {
     if hash_table.is_empty() || num_workers == 0 {
         return Vec::new();
     }
@@ -79,7 +88,8 @@ pub fn partition_by_device<'a>(
     // Initialize workers with empty chunks
     let mut worker_chunks: Vec<CsvChunk> = (0..num_workers)
         .map(|_| CsvChunk {
-            data: String::new(),
+            mmap_data,
+            line_offsets: Vec::new(),
             header: header.to_string(),
             device_ids: Vec::new(),
             line_count: 0,
@@ -102,12 +112,7 @@ pub fn partition_by_device<'a>(
         // Add device data to the selected worker's chunk
         if let Some(device_lines) = hash_table.get(&device_id) {
             let chunk = &mut worker_chunks[min_worker_idx];
-            for line in device_lines.iter() {
-                if !chunk.data.is_empty() {
-                    chunk.data.push('\n');
-                }
-                chunk.data.push_str(line);
-            }
+            chunk.line_offsets.extend(device_lines.iter().cloned());
             chunk.device_ids.push(device_id);
             chunk.line_count += line_count;
             worker_loads[min_worker_idx] += line_count;

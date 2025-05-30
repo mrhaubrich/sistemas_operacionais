@@ -2,12 +2,12 @@ use crate::data_analysis::analyze_csv_chunk;
 use crate::types::{AnalysisResults, CsvChunk};
 use anyhow::Result;
 use crossbeam_channel;
+use crossbeam_utils::thread;
 use rayon::prelude::*;
 use std::time::Instant;
-use tokio::sync::mpsc;
 
 /// Process multiple CSV chunks in parallel using Rayon
-pub fn process_chunks_parallel(chunks: Vec<CsvChunk>) -> Result<Vec<AnalysisResults>> {
+pub fn process_chunks_parallel<'a>(chunks: Vec<CsvChunk<'a>>) -> Result<Vec<AnalysisResults>> {
     let start_time = Instant::now();
 
     println!("[PARALLEL] Processing {} chunks in parallel", chunks.len());
@@ -53,83 +53,6 @@ pub fn process_chunks_parallel(chunks: Vec<CsvChunk>) -> Result<Vec<AnalysisResu
     results
 }
 
-/// Async version using Tokio tasks (alternative approach)
-pub async fn process_chunks_async(chunks: Vec<CsvChunk>) -> Result<Vec<AnalysisResults>> {
-    let start_time = Instant::now();
-    let chunk_count = chunks.len();
-
-    println!("[ASYNC] Processing {} chunks asynchronously", chunk_count);
-
-    // Create a channel for results
-    let (tx, mut rx) = mpsc::unbounded_channel();
-
-    // Spawn a task for each chunk
-    let handles: Vec<_> = chunks
-        .into_iter()
-        .enumerate()
-        .map(|(idx, chunk)| {
-            let tx = tx.clone();
-            tokio::task::spawn_blocking(move || {
-                println!(
-                    "[ASYNC WORKER {}] Processing chunk with {} lines",
-                    idx, chunk.line_count
-                );
-
-                let chunk_start = Instant::now();
-                let result = analyze_csv_chunk(&chunk);
-                let chunk_time = chunk_start.elapsed();
-
-                match &result {
-                    Ok(analysis_result) => {
-                        println!(
-                            "[ASYNC WORKER {}] Completed in {:.2}ms - {} aggregations generated",
-                            idx,
-                            chunk_time.as_millis(),
-                            analysis_result.aggregations.len()
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("[ASYNC WORKER {}] Error: {}", idx, e);
-                    }
-                }
-
-                // Send result back
-                let _ = tx.send((idx, result));
-            })
-        })
-        .collect();
-
-    // Drop the original sender so the receiver knows when all tasks are done
-    drop(tx);
-
-    // Collect results in order
-    let mut results: Vec<Option<Result<AnalysisResults>>> =
-        (0..chunk_count).map(|_| None).collect();
-    while let Some((idx, result)) = rx.recv().await {
-        results[idx] = Some(result);
-    }
-
-    // Wait for all tasks to complete
-    for handle in handles {
-        handle.await?;
-    }
-
-    let total_time = start_time.elapsed();
-    println!(
-        "[ASYNC] All chunks processed in {:.2}s",
-        total_time.as_secs_f64()
-    );
-
-    // Convert Option<Result<...>> to Result<Vec<...>>
-    results
-        .into_iter()
-        .enumerate()
-        .map(|(idx, opt_result)| {
-            opt_result.unwrap_or_else(|| Err(anyhow::anyhow!("Task {} did not complete", idx)))
-        })
-        .collect()
-}
-
 /// Work-stealing queue implementation using crossbeam channels
 pub struct WorkStealingProcessor {
     workers: usize,
@@ -140,7 +63,7 @@ impl WorkStealingProcessor {
         Self { workers }
     }
 
-    pub fn process_chunks(self, chunks: Vec<CsvChunk>) -> Result<Vec<AnalysisResults>> {
+    pub fn process_chunks<'a>(self, chunks: Vec<CsvChunk<'a>>) -> Result<Vec<AnalysisResults>> {
         let start_time = Instant::now();
         let chunk_count = chunks.len();
 
@@ -163,82 +86,83 @@ impl WorkStealingProcessor {
         }
         drop(work_sender); // Signal no more work
 
-        // Spawn worker threads
-        let mut handles = Vec::new();
-        for worker_id in 0..self.workers {
-            let work_receiver = work_receiver.clone();
-            let result_sender = result_sender.clone();
+        thread::scope(|s| {
+            // Spawn worker threads
+            let mut handles = Vec::new();
+            for worker_id in 0..self.workers {
+                let work_receiver = work_receiver.clone();
+                let result_sender = result_sender.clone();
 
-            let handle = std::thread::spawn(move || {
-                let mut processed_chunks = 0;
+                let handle = s.spawn(move |_| {
+                    let mut processed_chunks = 0;
 
-                while let Ok((chunk_idx, chunk)) = work_receiver.recv() {
-                    println!(
-                        "[WORKER {}] Processing chunk {} with {} lines",
-                        worker_id, chunk_idx, chunk.line_count
-                    );
+                    while let Ok((chunk_idx, chunk)) = work_receiver.recv() {
+                        println!(
+                            "[WORKER {}] Processing chunk {} with {} lines",
+                            worker_id, chunk_idx, chunk.line_count
+                        );
 
-                    let chunk_start = Instant::now();
-                    let result = analyze_csv_chunk(&chunk);
-                    let chunk_time = chunk_start.elapsed();
+                        let chunk_start = Instant::now();
+                        let result = analyze_csv_chunk(&chunk);
+                        let chunk_time = chunk_start.elapsed();
 
-                    match &result {
-                        Ok(analysis_result) => {
-                            println!(
-                                "[WORKER {}] Chunk {} completed in {:.2}ms - {} aggregations",
-                                worker_id,
-                                chunk_idx,
-                                chunk_time.as_millis(),
-                                analysis_result.aggregations.len()
-                            );
+                        match &result {
+                            Ok(analysis_result) => {
+                                println!(
+                                    "[WORKER {}] Chunk {} completed in {:.2}ms - {} aggregations",
+                                    worker_id,
+                                    chunk_idx,
+                                    chunk_time.as_millis(),
+                                    analysis_result.aggregations.len()
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("[WORKER {}] Chunk {} error: {}", worker_id, chunk_idx, e);
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("[WORKER {}] Chunk {} error: {}", worker_id, chunk_idx, e);
-                        }
+
+                        result_sender.send((chunk_idx, result)).unwrap();
+                        processed_chunks += 1;
                     }
 
-                    result_sender.send((chunk_idx, result)).unwrap();
-                    processed_chunks += 1;
-                }
+                    println!(
+                        "[WORKER {}] Completed {} chunks",
+                        worker_id, processed_chunks
+                    );
+                });
 
-                println!(
-                    "[WORKER {}] Completed {} chunks",
-                    worker_id, processed_chunks
-                );
-            });
+                handles.push(handle);
+            }
+            drop(result_sender); // Signal no more results
 
-            handles.push(handle);
-        }
+            // Collect results
+            let mut results: Vec<Option<Result<AnalysisResults>>> =
+                (0..chunk_count).map(|_| None).collect();
+            while let Ok((idx, result)) = result_receiver.recv() {
+                results[idx] = Some(result);
+            }
 
-        drop(result_sender); // Signal no more results
+            // Wait for all workers to finish
+            for handle in handles {
+                handle.join().unwrap();
+            }
 
-        // Collect results
-        let mut results: Vec<Option<Result<AnalysisResults>>> =
-            (0..chunk_count).map(|_| None).collect();
-        while let Ok((idx, result)) = result_receiver.recv() {
-            results[idx] = Some(result);
-        }
+            let total_time = start_time.elapsed();
+            println!(
+                "[WORK_STEALING] All chunks processed in {:.2}s",
+                total_time.as_secs_f64()
+            );
 
-        // Wait for all workers to finish
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        let total_time = start_time.elapsed();
-        println!(
-            "[WORK_STEALING] All chunks processed in {:.2}s",
-            total_time.as_secs_f64()
-        );
-
-        // Convert to final result
-        results
-            .into_iter()
-            .enumerate()
-            .map(|(idx, opt_result)| {
-                opt_result
-                    .unwrap_or_else(|| Err(anyhow::anyhow!("Chunk {} was not processed", idx)))
-            })
-            .collect()
+            // Convert to final result
+            Ok(results
+                .into_iter()
+                .enumerate()
+                .map(|(idx, opt_result)| {
+                    opt_result.unwrap_or_else(|| Err(anyhow::anyhow!("Chunk {} was not processed", idx)))
+                })
+                .collect::<Result<Vec<_>>>()?)
+        })
+        .unwrap()
     }
 }
 
@@ -267,26 +191,11 @@ pub fn print_processing_stats(results: &[AnalysisResults]) {
     println!("\n[STATS] ====== Processing Statistics ======");
     println!("[STATS] Total chunks processed: {}", results.len());
     println!("[STATS] Total lines processed: {}", total_lines);
-    println!(
-        "[STATS] Total aggregations generated: {}",
-        total_aggregations
-    );
-    println!(
-        "[STATS] Total processing time: {:.2}ms",
-        total_processing_time
-    );
-    println!(
-        "[STATS] Average processing time per chunk: {:.2}ms",
-        avg_processing_time
-    );
-    println!(
-        "[STATS] Fastest chunk processing: {:.2}ms",
-        min_processing_time
-    );
-    println!(
-        "[STATS] Slowest chunk processing: {:.2}ms",
-        max_processing_time
-    );
+    println!("[STATS] Total aggregations generated: {}", total_aggregations);
+    println!("[STATS] Total processing time: {:.2}ms", total_processing_time);
+    println!("[STATS] Average processing time per chunk: {:.2}ms", avg_processing_time);
+    println!("[STATS] Fastest chunk processing: {:.2}ms", min_processing_time);
+    println!("[STATS] Slowest chunk processing: {:.2}ms", max_processing_time);
 
     if total_processing_time > 0.0 {
         let throughput = total_lines as f64 / (total_processing_time / 1000.0);

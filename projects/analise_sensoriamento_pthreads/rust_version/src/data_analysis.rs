@@ -8,7 +8,7 @@ use std::time::Instant;
 pub fn analyze_csv_chunk(chunk: &CsvChunk) -> Result<AnalysisResults> {
     let start_time = Instant::now();
 
-    if chunk.data.is_empty() {
+    if chunk.line_offsets.is_empty() {
         return Ok(AnalysisResults {
             aggregations: Vec::new(),
             total_lines_processed: 0,
@@ -16,13 +16,16 @@ pub fn analyze_csv_chunk(chunk: &CsvChunk) -> Result<AnalysisResults> {
         });
     }
 
-    // Create CSV content with header
-    let csv_content = format!("{}\n{}", chunk.header, chunk.data);
+    // Reconstruct lines from mmap_data and line_offsets
+    let mut lines: Vec<&str> = Vec::with_capacity(chunk.line_offsets.len() + 1);
+    lines.push(&chunk.header); // header as first line
+    for &(start, end) in &chunk.line_offsets {
+        let line_bytes = &chunk.mmap_data[start..end];
+        let line_str = std::str::from_utf8(line_bytes).unwrap_or("");
+        lines.push(line_str);
+    }
 
-    // Parse CSV manually since Polars scan_csv is not available for in-memory data
-    let lines: Vec<&str> = csv_content.lines().collect();
-
-    if lines.is_empty() {
+    if lines.len() <= 1 {
         return Ok(AnalysisResults {
             aggregations: Vec::new(),
             total_lines_processed: 0,

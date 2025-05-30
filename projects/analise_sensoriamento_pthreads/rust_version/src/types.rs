@@ -2,9 +2,11 @@ use ahash::AHashMap;
 
 /// Represents a slice of CSV data with associated metadata
 #[derive(Debug, Clone)]
-pub struct CsvChunk {
-    /// The raw CSV data as a string slice
-    pub data: String,
+pub struct CsvChunk<'a> {
+    /// Reference to the memory-mapped CSV data
+    pub mmap_data: &'a [u8],
+    /// Offsets (start, end) for each line in this chunk
+    pub line_offsets: Vec<(usize, usize)>,
     /// CSV header for this chunk
     pub header: String,
     /// Device IDs included in this chunk
@@ -23,8 +25,8 @@ pub struct DeviceEntry {
     pub lines: Vec<String>,
 }
 
-/// Thread-safe hash table mapping device IDs to their data lines
-pub type DeviceHashTable<'a> = AHashMap<String, Vec<&'a str>>;
+/// Thread-safe hash table mapping device IDs to their data line offsets
+pub type DeviceHashTable = AHashMap<String, Vec<(usize, usize)>>;
 
 /// Represents sensor data aggregations
 #[derive(Debug, Clone)]
