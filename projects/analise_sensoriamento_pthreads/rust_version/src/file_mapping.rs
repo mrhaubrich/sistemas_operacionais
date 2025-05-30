@@ -61,6 +61,7 @@ impl MappedCsvFile {
     }
     
     /// Get the entire file content as a string
+    #[allow(dead_code)]
     pub fn get_full_content(&self) -> Result<&str> {
         std::str::from_utf8(&self.mmap)
             .with_context(|| "File contains invalid UTF-8")

@@ -1,5 +1,4 @@
 use ahash::AHashMap;
-use std::sync::Arc;
 
 /// Represents a slice of CSV data with associated metadata
 #[derive(Debug, Clone)]
@@ -16,6 +15,7 @@ pub struct CsvChunk {
 
 /// Entry for a specific device containing all its data lines
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DeviceEntry {
     /// Device identifier
     pub device_id: String,
@@ -47,6 +47,7 @@ pub struct AnalysisResults {
 
 /// Configuration for CSV processing
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ProcessingConfig {
     /// Path to the CSV file
     pub file_path: String,
@@ -71,6 +72,7 @@ impl Default for ProcessingConfig {
 
 /// Statistics about the CSV file and processing
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ProcessingStats {
     pub total_lines: usize,
     pub unique_devices: usize,
