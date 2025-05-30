@@ -1,4 +1,4 @@
-use dashmap::DashMap;
+use ahash::AHashMap;
 use std::sync::Arc;
 
 /// Represents a slice of CSV data with associated metadata
@@ -24,7 +24,7 @@ pub struct DeviceEntry {
 }
 
 /// Thread-safe hash table mapping device IDs to their data lines
-pub type DeviceHashTable = Arc<DashMap<String, Vec<String>>>;
+pub type DeviceHashTable<'a> = AHashMap<String, Vec<&'a str>>;
 
 /// Represents sensor data aggregations
 #[derive(Debug, Clone)]

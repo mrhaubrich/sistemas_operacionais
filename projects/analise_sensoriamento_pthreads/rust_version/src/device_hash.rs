@@ -1,50 +1,64 @@
 use crate::types::{CsvChunk, DeviceHashTable, ProcessingConfig};
 use anyhow::Result;
-use dashmap::DashMap;
-use std::sync::Arc;
+use ahash::AHashMap;
 
 /// Build a hash table organizing CSV data by device
-pub fn build_device_hash_table(
-    data: &str,
+pub fn build_device_hash_table<'a>(
+    data: &'a str,
     device_column_index: usize,
     _header: &str,
     config: &ProcessingConfig,
-) -> Result<DeviceHashTable> {
-    let hash_table = Arc::new(DashMap::new());
-    
-    // Process each line and organize by device
+) -> Result<DeviceHashTable<'a>> {
+    let estimated_lines = data.lines().count();
+    let mut hash_table: DeviceHashTable<'a> = AHashMap::with_capacity(estimated_lines / 2);
+    let delimiter = config.delimiter as u8;
     for line in data.lines() {
-        let line = line.trim();
+        let line = line; // no trim for performance
         if line.is_empty() {
             continue;
         }
-        
-        let fields: Vec<&str> = line.split(config.delimiter).collect();
-        
-        // Ensure we have enough fields
-        if fields.len() <= device_column_index {
+        let bytes = line.as_bytes();
+        let mut col_start = 0;
+        let mut col_end = 0;
+        let mut col_idx = 0;
+        let mut found = false;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == delimiter {
+                if col_idx == device_column_index {
+                    col_end = i;
+                    found = true;
+                    break;
+                }
+                col_idx += 1;
+                col_start = i + 1;
+            }
+        }
+        if !found {
+            // If last column
+            if col_idx == device_column_index {
+                col_end = bytes.len();
+                found = true;
+            }
+        }
+        if !found {
             eprintln!("Warning: Line has insufficient fields: {}", line);
             continue;
         }
-        
-        let device_id = fields[device_column_index].trim();
+        // SAFETY: line is valid UTF-8, so this slice is too
+        let device_id = unsafe { std::str::from_utf8_unchecked(&bytes[col_start..col_end]) };
         if device_id.is_empty() {
-            continue; // Skip lines with empty device IDs
+            continue;
         }
-        
-        // Add the line to the device's entry
-        hash_table
-            .entry(device_id.to_string())
+        hash_table.entry(device_id.to_string())
             .or_insert_with(Vec::new)
-            .push(line.to_string());
+            .push(line);
     }
-    
     Ok(hash_table)
 }
 
 /// Partition devices across workers to balance load
-pub fn partition_by_device(
-    hash_table: &DeviceHashTable,
+pub fn partition_by_device<'a>(
+    hash_table: &DeviceHashTable<'a>,
     num_workers: usize,
     header: &str,
 ) -> Vec<CsvChunk> {
@@ -55,7 +69,7 @@ pub fn partition_by_device(
     // Collect all devices with their line counts
     let mut devices_with_counts: Vec<(String, usize)> = hash_table
         .iter()
-        .map(|entry| (entry.key().clone(), entry.value().len()))
+        .map(|(k, v)| (k.clone(), v.len()))
         .collect();
     
     // Sort by line count (descending) to enable better load balancing
@@ -87,14 +101,12 @@ pub fn partition_by_device(
         // Add device data to the selected worker's chunk
         if let Some(device_lines) = hash_table.get(&device_id) {
             let chunk = &mut worker_chunks[min_worker_idx];
-            
             for line in device_lines.iter() {
                 if !chunk.data.is_empty() {
                     chunk.data.push('\n');
                 }
                 chunk.data.push_str(line);
             }
-            
             chunk.device_ids.push(device_id);
             chunk.line_count += line_count;
             worker_loads[min_worker_idx] += line_count;
@@ -131,7 +143,6 @@ pub fn calculate_load_balance_stats(chunks: &[CsvChunk]) -> (f64, usize, usize) 
 mod tests {
     use super::*;
     use crate::types::ProcessingConfig;
-    
     #[test]
     fn test_device_hash_table_building() -> Result<()> {
         let data = "1|dev1|23.5|45.2\n2|dev1|24.1|46.8\n3|dev2|22.8|44.5";
@@ -139,30 +150,23 @@ mod tests {
             delimiter: '|',
             ..Default::default()
         };
-        
         let hash_table = build_device_hash_table(data, 1, "id|device|temp|hum", &config)?;
-        
         assert_eq!(hash_table.len(), 2);
         assert!(hash_table.contains_key("dev1"));
         assert!(hash_table.contains_key("dev2"));
         assert_eq!(hash_table.get("dev1").unwrap().len(), 2);
         assert_eq!(hash_table.get("dev2").unwrap().len(), 1);
-        
         Ok(())
     }
-    
     #[test]
     fn test_device_partitioning() {
-        let hash_table = Arc::new(DashMap::new());
-        hash_table.insert("dev1".to_string(), vec!["line1".to_string(), "line2".to_string()]);
-        hash_table.insert("dev2".to_string(), vec!["line3".to_string()]);
-        
+        let mut hash_table: DeviceHashTable = AHashMap::new();
+        hash_table.insert("dev1".to_string(), vec!["line1", "line2"]);
+        hash_table.insert("dev2".to_string(), vec!["line3"]);
         let chunks = partition_by_device(&hash_table, 2, "header");
-        
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks.iter().map(|c| c.line_count).sum::<usize>(), 3);
     }
-    
     #[test]
     fn test_load_balance_stats() {
         let chunks = vec![

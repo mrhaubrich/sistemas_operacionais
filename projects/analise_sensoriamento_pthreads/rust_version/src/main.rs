@@ -15,7 +15,7 @@ use crate::data_analysis::results_to_csv;
 use crate::device_hash::{build_device_hash_table, calculate_load_balance_stats, partition_by_device};
 use crate::file_mapping::MappedCsvFile;
 use crate::parallel_processor::{print_processing_stats, process_chunks_parallel, WorkStealingProcessor};
-use crate::types::{ProcessingConfig, ProcessingStats};
+use crate::types::ProcessingConfig;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -116,7 +116,7 @@ fn main() -> Result<()> {
     let hash_time = hash_start.elapsed();
     
     // Count total lines
-    let total_lines: usize = device_hash_table.iter().map(|entry| entry.value().len()).sum();
+    let total_lines: usize = device_hash_table.iter().map(|(_, v)| v.len()).sum();
     let unique_devices = device_hash_table.len();
     
     println!("[PHASE 2] ✅ Hash table built in {:.2}ms", hash_time.as_millis());
